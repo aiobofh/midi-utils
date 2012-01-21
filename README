@@ -1,0 +1,32 @@
+MIDI-utils
+==========
+
+This is a set of useful MIDI-translation tools for Linux-based Digital Audio
+Workstations. These tools are mainly simplistic hacks but they do come in
+handy in some cases. At least in my studio.
+
+note2note
+---------
+
+A simple program that translates input MIDI-notes into other MIDI-notes using
+a small configuration files. This comes in handy when you want to hook up
+your favorite digital drum-set to another application or hardware that does
+not map the correct sample/generator to the given drum-pad.
+
+I wrote this mainly for fun to be able to play the "Drummer"-application in
+a Commodore 64 MSSIAH-cartridge from my Roland TD-9 drum-set. It works like a
+charm, and I now have realized that it comes in handy if I'd like to sequence
+using e.g. Rosegarden and with as little configuration as possible be able to
+replace my TD-9 module as sound source by using e.g. Hydrogen. These two does
+not map notes in the same way.
+
+note2jacktransport
+------------------
+
+If you have some generic device that you wish to use as a transport (play,
+stop, record, forward, reverse and so on) for controlling other Linux-
+applications that understand Jack Transport.
+
+This tool exists since I have an Event EzBus mixer with transport-controls
+that does not talk MIDI Machine Control like you would probably assume. It
+rather sends a MIDI note for every button... Hence this hack :D.
