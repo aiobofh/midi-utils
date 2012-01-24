@@ -19,9 +19,9 @@ clean:
 
 install:
 	@mkdir -p $CONFDIR
-	@cp -v src/note2note $(BINDIR)/.
+	@cp -v src/note2note src/note2jacktransport $(BINDIR)/.
 	@cp -v contrib/*.n2n $(CONFDIR)/.
 
 uninstall:
-	rm -rf $(BINDIR)/note2note $(CONFDIR)
+	rm -rf $(BINDIR)/note2note $(BINDIR)/note2jacktransport $(CONFDIR)
 
