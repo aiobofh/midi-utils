@@ -1,7 +1,0 @@
-/*
- * quit.h
- *
- * Handle clean quits when a proess is killed.
- *
- */
-
