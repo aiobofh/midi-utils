@@ -1,7 +1,7 @@
 /*
- * note2note.c
+ * midi2midi.c
  *
- * Copyright (C)   
+ * Copyright (C)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,8 +23,8 @@
  *
  * Author: AiO <aio at aio dot nu>
  *
- * Simple MIDI note-to-note converter. Original idea was to translate
- * digital percusion notes to other notes. For example to be able to 
+ * Simple MIDI to MIDI converter. Original idea was to translate
+ * digital percusion notes to other notes. For example to be able to
  * in a simple way map digital drums against varous softwares and hardwares.
  *
  * Remember it is a hack!!! I do not take any responsibility for your
@@ -38,19 +38,17 @@
  * How-to Compile
  * --------------
  *
- * Just run GCC :)
- *
- * gcc -o note2note note2note.c -lasound -Wall -pedantic -std=c99
+ * make
  *
  * How-to run
  * ----------
  *
- * note2note -c configfile.n2n
+ * midi2midi -c configfile.m2m
  *
- * Example config file (roland_td9-mssiah_sid.n2n)
+ * Example config file (roland_td9-mssiah_sid.m2m)
  * -----------------------------------------------
  *
- * note2note-config-1.0
+ * midi2midi-config-1.0
  * Roland TD-9/MSSIAH
  * 26:46
  * 47:44
@@ -62,7 +60,65 @@
  * 38:38
  * 36:36
  *
+ * Example config file (event_ezbus2jack_mixer.m2m)
+ * ------------------------------------------------
+ *
+ * midi2midi-config-1.1
+ * Event EZ-Bus/Jack Mixer
+ * 12>13
+ * 13>15
+ * 14>17
+ * 15>19
+ * 16>21
+ * 17>23
+ * 18>25
+ * 19J1
+ * 20J2
+ * 21M4
+ *
+ * Jack transport
+ * --------------
+ *
+ * These transformations are quite simple and cryptic...
+ *
+ * You can convert a note into a jack transport command like this:
+ *
+ * <note>J<Jack-transport command>
+ *
+ * Or the other way around...
+ *
+ * <Jack-transport command>j<note>
+ *
+ * Command matrix
+ * - - - - - - -
+ *
+ * 1 = PLAY
+ * 2 = STOP
+ * 4 = FAST FORWARD
+ * 5 = REWIND
+ * 47 = WHEEL
+ *
+ * MIDI Machine Control
+ * --------------------
+ *
+ * This is quite similar to the jack transport translation but instead you
+ * can translate notes into specific MIDI Machine Control commands, or the
+ * other way around.
+ *
  * That's about it :) Enjoy!
+ *
+ * Command repitition prevention
+ * -----------------------------
+ *
+ * If you (like me) have a microKORG XL and are annoyed by seq24 not being
+ * able to configure the synth in a usable way (if you set the program change
+ * in every pattern for easy live performance) since the micro tend to scrap
+ * all effects at a program change this feature is really nifty.
+ *
+ * 0P0
+ *
+ * Prevent MIDI control command 0 to repeat if the value ut sent is the same
+ * as the last time it was sent.
  *
  */
 
@@ -72,26 +128,50 @@
 #include <signal.h>
 #include <unistd.h>
 #include <alsa/asoundlib.h>
+#include <jack/jack.h>
+#include <jack/transport.h>
 
+#include "error.h"
+#include "debug.h"
 #include "quit.h"
+#include "sequencer.h"
+#include "jack_transport.h"
 
-#define APPNAME "note2note"
-#define VERSION "1.0.0"
+#define APPNAME "midi2midi"
+#define VERSION "1.1.0"
 
-static int debug = 0;
 static int quit = 0;
 
+typedef enum {
+  TT_NONE,
+  TT_NOTE_TO_NOTE,
+  TT_CC_TO_CC,
+  TT_CC_TO_CC_IF_VALUE_CHANGE,
+  TT_NOTE_TO_JACK,
+  TT_NOTE_TO_MMC
+} translation_type;
+
+typedef struct {
+  translation_type type;
+  char value;
+  char last_value;
+  int line;
+} translation;
 
 /*
  * Command usage
  */
 static void usage(char *app_name) {
-  printf("USAGE: %s -c <filename> [-dvh]\n"
+  printf("USAGE: %s -c <filename> [-dvh]\n\n"
 	 " -h, --help        Show this help text.\n"
 	 " -v, --version     Display version information.\n"
 	 " -c, --config=file Note translation configuration file to load.\n"
 	 " -d, --debug       Output debug information.\n"
 	 "\n"
+         "This tool is a useful MIDI proxy if you own studio equipment that\n"
+         "will not speak to eachother the way you want to. Just route your\n"
+         "MIDI signals through an instance of this and make magic happen!\n"
+         "\n"
 	 "Author: AiO\n", app_name);
 }
 
@@ -102,83 +182,8 @@ static void usage(char *app_name) {
  */
 static void quit_callback(int sig) {
   signal(sig, quit_callback);
-  if (debug) {
-    printf("DEBUG: Quitting...\n");
-  }
+  debug("DEBUG: Quitting with signal %d", sig);
   quit = 1;
-}
-
-
-/*
- * Allocate and initialize the MIDI interfaces.
- */
-static snd_seq_t *sequencer_new(int *in_port_ptr,
-				int *out_port_ptr,
-				char *port_name) {
-
-  snd_seq_t *seq_handle;
-
-  /*
-   * Open an ALSA MIDI input and output ports.
-   */
-  if (snd_seq_open(&seq_handle, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
-    fprintf(stderr, "Error opening ALSA sequencer.\n");
-    exit(2);
-  }
-  snd_seq_set_client_name(seq_handle, port_name);
-
-  *in_port_ptr = snd_seq_create_simple_port(seq_handle, "In",
-					    SND_SEQ_PORT_CAP_WRITE |
-					    SND_SEQ_PORT_CAP_SUBS_WRITE,
-					    SND_SEQ_PORT_TYPE_APPLICATION);
-  if (*in_port_ptr < 0) {
-    fprintf(stderr, "Error creating sequencer input port.\n");
-    exit(3);
-  }
-
-  *out_port_ptr = snd_seq_create_simple_port(seq_handle, "Out",
-					     SND_SEQ_PORT_CAP_READ |
-					     SND_SEQ_PORT_CAP_SUBS_READ,
-					     SND_SEQ_PORT_TYPE_APPLICATION);
-  if (*out_port_ptr < 0) {
-    fprintf(stderr, "Error creating sequencer output port.\n");
-    exit(4);
-  }
-
-  return seq_handle;
-}
-
-
-/*
- * Cleanup MIDI interfaces and locked resources.
- */
-static void sequencer_delete(snd_seq_t *seq_handle) {
-  snd_seq_close(seq_handle);
-}
-
-
-/*
- * Allocate and initiate a new MIDI event poller.
- */
-static struct pollfd *sequencer_poller_new(snd_seq_t *seq_handle,
-					   int *npfd_ptr) {
-  struct pollfd *pfd;
-  /*
-   * Prepeare event polling on the MIDI input.
-   */
-  *npfd_ptr = snd_seq_poll_descriptors_count(seq_handle, POLLIN);
-  pfd = (struct pollfd *)malloc(*npfd_ptr * sizeof(struct pollfd));
-  snd_seq_poll_descriptors(seq_handle, pfd, *npfd_ptr, POLLIN);
-
-  return  pfd;
-}
-
-
-/*
- * Cleanup a MIDI event poller.
- */
-static void sequencer_poller_delete(struct pollfd *pfd) {
-  free(pfd);
 }
 
 
@@ -186,26 +191,25 @@ static void sequencer_poller_delete(struct pollfd *pfd) {
  * Parse configuration file and construct a translation table.
  */
 static void translation_table_init(const char *filename,
-				   int translation_table[256],
+				   translation note_table[255],
+                                   translation cc_table[255],
 				   char *port_name) {
   FILE *fd;
   int line_number = 0;
-  int i; 
+  int i;
 
   if ((fd = fopen(filename, "r")) == NULL) {
-    fprintf(stderr, "ERROR: Unable to open file '%s'.\n", filename);
-    exit(EXIT_FAILURE);
+    error("Unable to open file '%s'.", filename);
   }
 
-  if (debug) {
-    printf("DEBUG: Reading file '%s'\n", filename);
-  }
-  
-  /*
-   * No translation, by default.
-   */
+  debug("Reading file '%s'", filename);
+
   for (i = 0; i < 255; i++) {
-    translation_table[i] = i;
+    note_table[i].type = TT_NONE;
+    note_table[i].value = i;
+    cc_table[i].type = TT_NONE;
+    cc_table[i].value = i;
+    cc_table[i].last_value = -1;
   }
 
   /*
@@ -213,6 +217,8 @@ static void translation_table_init(const char *filename,
    */
   while (!feof(fd)) {
     int from, to;
+    char c;
+    translation_type type;
     errno = 0;
     line_number++;
 
@@ -221,19 +227,32 @@ static void translation_table_init(const char *filename,
      * line is the name of th MIDI-port to upen and the rest is the actual
      * MIDI note conversion table defintion.
      */
-    if (line_number == 1) {
+    if (1 == line_number) {
       /*
        * Make sure that we can hande the file version :)
        */
-      fscanf(fd, "note2note-config-1.0\n");
+      fscanf(fd, "midi2midi-config-1.1\n");
 
       if (errno != 0) {
-	fprintf(stderr, "ERROR: The file is not a note2note config file.\n");
-	exit(EXIT_FAILURE);
+        debug("The file '%s' was no 1.1 file, trying 1.0", filename);
+
+        /*
+         * Just to be sure, start over.
+         */
+        rewind(fd);
+
+        /*
+         * We can also handle 1.0 configuration files.
+         */
+        fscanf(fd, "midi2midi-config-1.0\n");
+
+        if (errno != 0) {
+          error("The file '%s' is not a midi2midi config file.", filename);
+        }
       }
       continue;
     }
-    else if (line_number == 2) {
+    else if (2 == line_number) {
       /*
        * TODO: Make this a bit cleaner :)
        */
@@ -246,56 +265,173 @@ static void translation_table_init(const char *filename,
        */
       port_name[strlen(port_name)-1] = 0;
 
-      if (debug) {
-	printf("DEBUG: Read port name '%s'\n", port_name);
-      }
+      debug("Read port name '%s'", port_name);
 
-      if (errno != 0) {
-	fprintf(stderr, "ERROR: Could not get MIDI port name from config "
-		"file.n");
-	exit(EXIT_FAILURE);
+      if (0 != errno) {
+        error("Could not get MIDI port name from config file '%s'.",
+              filename);
       }
       continue;
     }
     else {
       /*
-       * Get note translation values.
+       * Read each line of the configuration file and insert translations into
+       * the table.
        */
-      fscanf(fd, "%d:%d\n", &from, &to);
+      fscanf(fd, "%d%c%d\n", &from, &c, &to);
 
-      if (errno != 0) {
-	fprintf(stderr, "ERROR: Error reading file '%s'.\n", filename);
-	exit(EXIT_FAILURE);
-      }
+      debug("Reading line %d %d%c%d", line_number, from, c, to);
 
-      if ((from < 0) || (from > 255)) {
-	fprintf(stderr, "ERROR: Line %d of '%s' has an invalid from-note"
-		" (must be 0-255).\n",
-		line_number, filename);
-	exit(EXIT_FAILURE);
-      }
-      
-      if ((to < 0) || (to > 255)) {
-	fprintf(stderr, "ERROR: Line %d of '%s' has an invalid to-note"
-		" (must be 0-255).\n",
-		line_number, filename);
-	exit(EXIT_FAILURE);
-      }
-      
-      if (debug) {
-	printf("DEBUG: Note %d will %d\n", from, to);
+      if (0 != errno) {
+	error("Error reading file '%s'.", filename);
       }
 
       /*
-       * Inser the note tranform in the translation table.
+       * Valid separators are '>' for CC and ':' for notes.
        */
-      translation_table[from] = to;
+      switch (c) {
+      case '>':
+        type = TT_CC_TO_CC;
+        break;
+      case ':':
+        type = TT_NOTE_TO_NOTE;
+        break;
+      case 'J':
+        type = TT_NOTE_TO_JACK;
+        break;
+      case 'M':
+        type = TT_NOTE_TO_MMC;
+        break;
+      case 'P':
+        type = TT_CC_TO_CC_IF_VALUE_CHANGE;
+        break;
+      default:
+        error("Separator '%c' is not valid in file '%s'.", c, filename);
+      }
+
+      if ((0 > from) || (255 < from)) {
+        error("Line %d of '%s' has an invalid from value (must be 0-255).",
+              line_number, filename);
+      }
+
+      if (TT_NOTE_TO_JACK != type) {
+        /*
+         * Perform some sanity checking.
+         */
+
+        if ((0 > to) || (255 < to)) {
+          error("Line %d of '%s' has an invalid to value (must be 0-255).",
+                line_number, filename);
+        }
+      }
+      else {
+        /*
+         * Hard wire translate all the possible jack translation values
+         * and make them as similar as posible to MMC.
+         */
+        if (1 == to) {
+          to = JT_STOP;
+        }
+        else if (2 == to) {
+          to = JT_PLAY;
+        }
+        else if (4 == to) {
+          to = JT_FWD;
+        }
+        else if (5 == to) {
+          to = JT_REV;
+        }
+        else if (47 == to) {
+          to = JT_WHEEL;
+        }
+        else {
+          error("%d is not a valid jack transport value (1, 2, 4, 5, 47)",
+                to);
+        }
+      }
+
+      /*
+       * Insert the note tranform in the translation table.
+       */
+      switch (type) {
+      case TT_NOTE_TO_NOTE:
+      case TT_NOTE_TO_JACK:
+      case TT_NOTE_TO_MMC:
+        /*
+         * Make sure that there are no duplicates in the note translation
+         * table.
+         */
+        if (TT_NONE != note_table[from].type) {
+          error("Note value %d is already translated on line %d with value %d"
+                "on line %d of file '%s'",
+                from, cc_table[from].line, cc_table[from].value, line_number,
+                filename);
+        }
+        note_table[from].type = type;
+        note_table[from].value = to;
+
+        /*
+         * Just some debugging trivia.
+         */
+        switch(type) {
+        case TT_NOTE_TO_NOTE:
+          debug("Every %d note will be translated to note %d", from, to);
+          break;
+        case TT_NOTE_TO_JACK:
+          debug("Every %d note will be translated to jack transport %d (raw)",
+                from, to);
+          break;
+        case TT_NOTE_TO_MMC:
+          debug("Every %d note will be translated to MIDI Machine Control %d",
+                from, to);
+          break;
+        default:
+          error("This should never happen type: %d.", type);
+          break;
+        }
+
+        break;
+      case TT_CC_TO_CC:
+      case TT_CC_TO_CC_IF_VALUE_CHANGE:
+        /*
+         * Make sure that there are no duplicates in the CC translation
+         * table.
+         */
+        if (TT_NONE != cc_table[from].type) {
+          error("CC value %d is already translated on line %d with value %d"
+                "on line %d of file '%s'",
+                from, cc_table[from].line, cc_table[from].value, line_number,
+                filename);
+        }
+        cc_table[from].type = type;
+        cc_table[from].value = to;
+
+        /*
+         * Just some debugging trivia.
+         */
+        switch(type) {
+        case TT_CC_TO_CC:
+          debug("Every %d CC will be translated to %d", from, to);
+          break;
+        case TT_CC_TO_CC_IF_VALUE_CHANGE:
+          debug("Every %d CC will be translated to %d if the value changes",
+                from, to);
+          break;
+        default:
+          error("This should never happen type: %d.", type);
+          break;
+        }
+        break;
+
+      default:
+        error("Type %d is not implemented yet", type);
+        break;
+      }
+      continue;
     }
   }
 
-  if (debug) {
-    printf("DEBUG: Reached end of file '%s'\n", filename);
-  }
+  debug("Reached end of file '%s'", filename);
 
   fclose(fd);
 }
@@ -303,12 +439,14 @@ static void translation_table_init(const char *filename,
 /*
  * Main event loop.
  */
-static void note2note(snd_seq_t *seq_handle,
+static void midi2midi(snd_seq_t *seq_handle,
+                      jack_client_t *jack_client,
 		      struct pollfd *pfd,
 		      int npfd,
 		      int in_port,
 		      int out_port,
-		      int translation_table[256]) {
+		      translation note_table[256],
+                      translation cc_table[256]) {
   /*
    * Note parameters
    */
@@ -317,57 +455,103 @@ static void note2note(snd_seq_t *seq_handle,
   /*
    * Poll the ALSA midi interface for events.
    */
-  if (poll(pfd, npfd, 100) > 0) {      
+  if (poll(pfd, npfd, 100) > 0) {
     /*
      * Loop over all events. (While at the end)
      */
     do {
+      int send_midi = 0;
       /*
        * Get the event information.
        */
       snd_seq_event_input(seq_handle, &ev);
-      snd_seq_ev_set_subs(ev);  
+      snd_seq_ev_set_subs(ev);
       snd_seq_ev_set_direct(ev);
-      
-      /*
-       * Someone ordered a steaming plate of debug?
-       */
-      if (debug) {
-	if ((ev->type == SND_SEQ_EVENT_NOTEON) ||
-	    (ev->type == SND_SEQ_EVENT_NOTEOFF)) {
-	  printf("DEBUG: Note: %d Velocity: %d Channel %d\n",
-		 ev->data.note.note,
-		 ev->data.note.velocity,
-		 ev->data.note.channel);
-	} else if (ev->type == SND_SEQ_EVENT_CONTROLLER) {
-	  printf("DEBUG: Param: %d Value: %d\n",
-		 ev->data.control.param,
-		 ev->data.control.value);
-	}
-      }
 
       /*
-       * Translate note.
+       * Translate either a note or a CC command.
        */
-      if ((ev->type == SND_SEQ_EVENT_NOTEON) ||
-	  (ev->type == SND_SEQ_EVENT_NOTEOFF)) {
-	if (debug) {
-	  if (ev->data.note.note != translation_table[ev->data.note.note]) {
-	    printf("DEBUG: Translating %d to %d\n",
-		   ev->data.note.note,
-		   translation_table[ev->data.note.note]);
-	  }
-	}
-	ev->data.note.note = translation_table[ev->data.note.note];
-	ev->data.note.channel = 0;
+      if (((SND_SEQ_EVENT_NOTEON == ev->type) ||
+           (SND_SEQ_EVENT_NOTEOFF == ev->type)) &&
+          (TT_NONE != note_table[ev->data.note.note].type)) {
+
+        switch (note_table[ev->data.note.note].type) {
+
+        case TT_NOTE_TO_NOTE:
+          /*
+           * Prepare to just forward a translated note.
+           */
+          debug("Translating note %d to note %d",
+                ev->data.note.note,
+                note_table[ev->data.note.note].value);
+          ev->data.note.note = note_table[ev->data.note.note].value;
+          send_midi = 1;
+          break;
+
+        case TT_NOTE_TO_JACK:
+          /*
+           * Send a jack transport command.
+           */
+          jack_transport_send(jack_client,
+                              note_table[ev->data.note.note].value,
+                              ev->data.note.velocity);
+          break;
+
+        default:
+          error("Note translation %d is not implemented yet.",
+                note_table[ev->data.note.note].type);
+          break;
+        }
+
+      }
+      else if ((SND_SEQ_EVENT_CONTROLLER == ev->type) &&
+               (TT_NONE != cc_table[ev->data.control.param].type)) {
+
+        switch (note_table[ev->data.note.note].type) {
+
+        case TT_CC_TO_CC:
+          debug("Translating CC param %d to CC param %d",
+                ev->data.control.param,
+                cc_table[ev->data.control.param].value);
+          ev->data.control.param = cc_table[ev->data.control.param].value;
+          send_midi = 1;
+          break;
+
+        case TT_CC_TO_CC_IF_VALUE_CHANGE:
+          /*
+           * Only forward value if the parameter value actually changed.
+           */
+          if (cc_table[ev->data.control.param].last_value !=
+              ev->data.control.value) {
+
+            debug("Translating CC param %d to CC param %d",
+                  ev->data.control.param,
+                  cc_table[ev->data.control.param].value);
+            ev->data.control.param = cc_table[ev->data.control.param].value;
+
+            cc_table[ev->data.control.param].last_value =
+              ev->data.control.value;
+
+            send_midi = 1;
+          }
+          break;
+
+        default:
+          error("CC param translation %d is not implemented yet.",
+                note_table[ev->data.note.note].type);
+          break;
+
+        }
       }
 
-      /*
-       * Output the translated note to the MIDI output port.
-       */
-      snd_seq_ev_set_source(ev, out_port);
-      snd_seq_event_output_direct(seq_handle, ev);
-      
+      if (1 == send_midi) {
+        /*
+         * Output the translated note to the MIDI output port.
+         */
+        snd_seq_ev_set_source(ev, out_port);
+        snd_seq_event_output_direct(seq_handle, ev);
+      }
+
       snd_seq_free_event(ev);
 
     } while (snd_seq_event_input_pending(seq_handle, 0) > 0);
@@ -376,7 +560,7 @@ static void note2note(snd_seq_t *seq_handle,
 
 
 /*
- * Main function of note2note.
+ * Main function of midi2midi.
  */
 int main(int argc, char *argv[]) {
 
@@ -393,9 +577,15 @@ int main(int argc, char *argv[]) {
   struct pollfd *pfd;
 
   /*
+   * Handles for Jack client stuff.
+   */
+  jack_client_t *jack_client;
+
+  /*
    * This is where the note translation-table is stored.
    */
-  int translation_table[256];
+  translation note_table[255];
+  translation cc_table[255];
 
   /*
    * Command line options variables.
@@ -422,7 +612,7 @@ int main(int argc, char *argv[]) {
 
     switch (c) {
     case 'd':
-      debug = 1;
+      debug_enable();
       break;
     case 'c':
       config_file = optarg;
@@ -437,7 +627,7 @@ int main(int argc, char *argv[]) {
       exit(EXIT_SUCCESS);
       break;
     default:
-      fprintf(stderr, "Unknown parameter %c.\n", c);
+      error("Unknown parameter %c.", c);
       usage(argv[0]);
       exit(EXIT_FAILURE);
       break;
@@ -448,39 +638,47 @@ int main(int argc, char *argv[]) {
    * Make sure that the all so important configuration file is provided.
    */
   if (config_file == NULL) {
-    fprintf(stderr, "ERROR: No configuration file provided.\n");
-    usage(argv[0]);
-    exit(EXIT_FAILURE);
-  }  
+    error("No configuration file provided use %s -h for more information.",
+          app_name);
+  }
 
   /*
    * Read the configuration file and get all the essential information.
    */
-  translation_table_init(config_file, translation_table, port_name);
+  translation_table_init(config_file, note_table, cc_table, port_name);
 
   /*
    * Set-up ALSA MIDI.
    */
   seq_handle = sequencer_new(&in_port, &out_port, port_name);
   pfd = sequencer_poller_new(seq_handle, &npfd);
-  
+  jack_client = jack_transport_new(port_name);
+
   /*
    * Ensure a clean exit in as many situations as possible.
    */
   quit_init(quit_callback);
-  
+
   /*
    * Main loop.
    */
   while (!quit) {
-    note2note(seq_handle, pfd, npfd, in_port, out_port, translation_table);
+    midi2midi(seq_handle,
+              jack_client,
+              pfd,
+              npfd,
+              in_port,
+              out_port,
+              note_table,
+              cc_table);
   }
-  
+
   /*
    * Cleanup resources.
    */
   sequencer_poller_delete(pfd);
   sequencer_delete(seq_handle);
+  jack_transport_delete(jack_client);
 
   /*
    * Make a clean exit.
