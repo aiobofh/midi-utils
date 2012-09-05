@@ -15,13 +15,13 @@ all:
 clean:
 	@cd src && make clean
 	@cd ..
-	rm *~
+	$(RM) *~
 
 install:
 	@mkdir -p $CONFDIR
-	@cp -v src/note2note src/note2jacktransport $(BINDIR)/.
-	@cp -v contrib/*.n2n $(CONFDIR)/.
+	@cp -v src/midi2midi $(BINDIR)/.
+	@cp -v contrib/*.m2m $(CONFDIR)/.
 
 uninstall:
-	rm -rf $(BINDIR)/note2note $(BINDIR)/note2jacktransport $(CONFDIR)
+	$(RM) -r $(BINDIR)/note2note $(BINDIR)/note2jacktransport $(BINDIR)/midi2midi $(CONFDIR)
 

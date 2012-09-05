@@ -198,12 +198,18 @@ static void translation_table_init(const char *filename,
   int line_number = 0;
   int i;
 
+  /*
+   * Open the specified configuration file.
+   */
   if ((fd = fopen(filename, "r")) == NULL) {
     error("Unable to open file '%s'.", filename);
   }
 
   debug("Reading file '%s'", filename);
 
+  /*
+   * Just set the translation tables for both notes and CCs to defaults.
+   */
   for (i = 0; i < 255; i++) {
     note_table[i].type = TT_NONE;
     note_table[i].value = i;
@@ -254,7 +260,8 @@ static void translation_table_init(const char *filename,
     }
     else if (2 == line_number) {
       /*
-       * TODO: Make this a bit cleaner :)
+       * TODO: Make this a bit cleaner since there is a potential buffer
+       *       overrun posibillity here.
        */
       /*
        * Get the name of the instance from the config file.
