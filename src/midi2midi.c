@@ -34,6 +34,7 @@
  * ------------
  *
  * libasound2-dev
+ * libjack2-dev
  *
  * How-to Compile
  * --------------
