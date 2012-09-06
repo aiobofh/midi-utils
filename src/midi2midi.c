@@ -341,23 +341,30 @@ static void translation_table_init(const char *filename,
        * Valid separators are '>' for CC and ':' for notes.
        */
       switch (c) {
-      case '>':
-        type = TT_CC_TO_CC;
-        break;
-      case ':':
-        type = TT_NOTE_TO_NOTE;
-        break;
-      case 'J':
-        type = TT_NOTE_TO_JACK;
-        break;
-      case 'M':
-        type = TT_NOTE_TO_MMC;
-        break;
-      case 'P':
-        type = TT_CC_TO_CC_IF_VALUE_CHANGE;
-        break;
-      default:
-        error("Separator '%c' is not valid in file '%s'.", c, filename);
+        case '>': {
+          type = TT_CC_TO_CC;
+          break;
+        }
+        case ':': {
+          type = TT_NOTE_TO_NOTE;
+          break;
+        }
+        case 'J': {
+          type = TT_NOTE_TO_JACK;
+          break;
+        }
+        case 'M': {
+          type = TT_NOTE_TO_MMC;
+          break;
+        }
+        case 'P': {
+          type = TT_CC_TO_CC_IF_VALUE_CHANGE;
+          break;
+        }
+        default: {
+          error("Separator '%c' is not valid in file '%s'.", c, filename);
+          break;
+        }
       }
 
       /*
@@ -409,42 +416,46 @@ static void translation_table_init(const char *filename,
        * Insert the note transformation in the translation table.
        */
       switch (type) {
-      case TT_NOTE_TO_NOTE:
-      case TT_NOTE_TO_JACK:
-      case TT_NOTE_TO_MMC:
-        /*
-         * Make sure that there are no duplicates in the note translation
-         * table.
-         */
-        if (TT_NONE != note_table[from].type) {
-          error("Note value %d is already translated on line %d with value %d"
-                "on line %d of file '%s'",
-                from, cc_table[from].line, cc_table[from].value, line_number,
-                filename);
-        }
-        note_table[from].type = type;
-        note_table[from].value = to;
+        case TT_NOTE_TO_NOTE:
+        case TT_NOTE_TO_JACK:
+        case TT_NOTE_TO_MMC: {
+          /*
+           * Make sure that there are no duplicates in the note translation
+           * table.
+           */
+          if (TT_NONE != note_table[from].type) {
+            error("Note value %d is already translated on line %d with value "
+                  "%d on line %d of file '%s'",
+                  from, cc_table[from].line, cc_table[from].value, line_number,
+                  filename);
+          }
+          note_table[from].type = type;
+          note_table[from].value = to;
 
-        break;
-      case TT_CC_TO_CC:
-      case TT_CC_TO_CC_IF_VALUE_CHANGE:
-        /*
-         * Make sure that there are no duplicates in the MIDI Contentious
-         * Control translation table.
-         */
-        if (TT_NONE != cc_table[from].type) {
-          error("CC value %d is already translated on line %d with value %d"
-                "on line %d of file '%s'",
-                from, cc_table[from].line, cc_table[from].value, line_number,
-                filename);
+          break;
         }
-        cc_table[from].type = type;
-        cc_table[from].value = to;
-        break;
+        case TT_CC_TO_CC:
+        case TT_CC_TO_CC_IF_VALUE_CHANGE: {
+          /*
+           * Make sure that there are no duplicates in the MIDI Contentious
+           * Control translation table.
+           */
+          if (TT_NONE != cc_table[from].type) {
+            error("CC value %d is already translated on line %d with value %d"
+                  "on line %d of file '%s'",
+                  from, cc_table[from].line, cc_table[from].value, line_number,
+                  filename);
+          }
+          cc_table[from].type = type;
+          cc_table[from].value = to;
 
-      default:
-        error("Type %d is not implemented yet", type);
-        break;
+          break;
+        }
+        default: {
+          error("Type %d is not implemented yet", type);
+
+          break;
+        }
       }
       continue;
     }
@@ -664,26 +675,29 @@ int main(int argc, char *argv[]) {
     }
 
     switch (c) {
-    case 'd':
-      debug_enable();
-      break;
-    case 'c':
-      config_file = optarg;
-      break;
-    case 'v':
-      printf("%s %s", app_name, VERSION);
-      exit(EXIT_SUCCESS);
-      break;
-    case '?':
-    case 'h':
-      usage(argv[0]);
-      exit(EXIT_SUCCESS);
-      break;
-    default:
-      error("Unknown parameter %c.", c);
-      usage(argv[0]);
-      exit(EXIT_FAILURE);
-      break;
+      case 'd': {
+        debug_enable();
+        break;
+      }
+      case 'c': {
+        config_file = optarg;
+        break;
+      }
+      case 'v': {
+        printf("%s %s", app_name, VERSION);
+        exit(EXIT_SUCCESS);
+        break;
+      }
+      case '?':
+      case 'h': {
+        usage(argv[0]);
+        exit(EXIT_SUCCESS);
+        break;
+      }
+      default: {
+        error("Unknown parameter %c.", c);
+        break;
+      }
     }
   }
 
