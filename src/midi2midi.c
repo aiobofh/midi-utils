@@ -25,7 +25,7 @@
  *
  * Simple MIDI to MIDI converter. Original idea was to translate
  * digital percusion notes to other notes. For example to be able to
- * in a simple way map digital drums against varous softwares and hardwares.
+ * in a simple way map digital drums against various soft-wares and hard-wares.
  *
  * Remember it is a hack!!! I do not take any responsibility for your
  * system. :)
@@ -45,8 +45,15 @@
  *
  * midi2midi -c configfile.m2m
  *
- * Example config file (roland_td9-mssiah_sid.m2m)
- * -----------------------------------------------
+ * The configuration file format is quite straight forward. You have a value
+ * which can be either a MIDI note or a MIDI Continuous Controller that is to
+ * be translated into another MIDI note, MIDI Continuous Controller, jack
+ * transport command or a MIDI Machine Control command. These two values are
+ * separated by a single character representing which kind of translation that
+ * need to be done.
+ *
+ * Example configuration file (roland_td9-mssiah_sid.m2m)
+ * - - - - - - - - - - - - - - - - - - - - - - - - - - -
  *
  * midi2midi-config-1.0
  * Roland TD-9/MSSIAH
@@ -60,8 +67,8 @@
  * 38:38
  * 36:36
  *
- * Example config file (event_ezbus2jack_mixer.m2m)
- * ------------------------------------------------
+ * Example configuration file (event_ezbus2jack_mixer.m2m)
+ * - - - - - - - - - - - - - - - - - - - - - - - - - - - -
  *
  * midi2midi-config-1.1
  * Event EZ-Bus/Jack Mixer
@@ -72,22 +79,60 @@
  * 16>21
  * 17>23
  * 18>25
- * 19J1
- * 20J2
- * 21M4
  *
- * Jack transport
- * --------------
+ * MIDI note to MIDI note translation
+ * ----------------------------------
  *
- * These transformations are quite simple and cryptic...
+ * Separator: ':'
  *
- * You can convert a note into a jack transport command like this:
+ * If you have some device producing MIDI notes that does not confirm to some
+ * other device you might want to be able to translate the note value into
+ * something different.
  *
- * <note>J<Jack-transport command>
+ * This comes in handy for example with percussion notes. In the example above
+ * I have a Roland TD-9 drum module sending notes for kick, snare, hi-hat and
+ * so on that does not comply to the MSSIAH Drummer application. Hence I need
+ * translate each note into another note, keeping velocity.
  *
- * Or the other way around...
+ * MIDI Continuous Controller to MIDI Continuous Controller translation
+ * --------------------------------------------------------------------
  *
- * <Jack-transport command>j<note>
+ * Separator: '>' or 'P'
+ *
+ * This works in exactly the same way as notes, but with the difference that
+ * the translation is done on MIDI Continuous Controls instead of notes.
+ *
+ * This comes in handy if you have a hardware mixer which sends a specific
+ * MIDI Continuous Control for a channel strip potentiometer but the program
+ * you want to talk to expects another one. This is done with the '>'
+ * separator.
+ *
+ * There is another version of this translation only being performed if the
+ * actual MSB value for the controller is changed. This is perfect for example
+ * when you want to prevent a MIDI device to change program if the program
+ * is already set. This is done with the 'P' separator.
+ *
+ * This can be done with:
+ *
+ * 0P0
+ *
+ * MIDI Continuous Controller 0 is the "Program change" controller.
+ *
+ * If you (like me) have a microKORG XL and are annoyed by seq24 not being
+ * able to configure the synthesiser in a usable way (if you set the program
+ * change in every pattern for easy live performance) since the micro tend to
+ * scrap all effects at a program change this feature is really nifty.
+ *
+ *
+ * Note to jack transport translation
+ * ----------------------------------
+ *
+ * Separator: 'J'
+ *
+ * This can come in handy if you want to use a keyboard or some other device
+ * sending MIDI notes to produce jack transport commands so that many
+ * audio applications can start/stop playing, rewinding, forwarding and
+ * such things in synchronised harmony using jack transport.
  *
  * Command matrix
  * - - - - - - -
@@ -98,27 +143,10 @@
  * 5 = REWIND
  * 47 = WHEEL
  *
- * MIDI Machine Control
- * --------------------
+ * Note to MIDI Machine Control
+ * ----------------------------
  *
- * This is quite similar to the jack transport translation but instead you
- * can translate notes into specific MIDI Machine Control commands, or the
- * other way around.
- *
- * That's about it :) Enjoy!
- *
- * Command repitition prevention
- * -----------------------------
- *
- * If you (like me) have a microKORG XL and are annoyed by seq24 not being
- * able to configure the synth in a usable way (if you set the program change
- * in every pattern for easy live performance) since the micro tend to scrap
- * all effects at a program change this feature is really nifty.
- *
- * 0P0
- *
- * Prevent MIDI control command 0 to repeat if the value ut sent is the same
- * as the last time it was sent.
+ * NOT IMPLEMENTED YET.
  *
  */
 
@@ -140,8 +168,17 @@
 #define APPNAME "midi2midi"
 #define VERSION "1.1.0"
 
+
+/*
+ * Set this variable to 1 to exit the main loop cleanly.
+ */
 static int quit = 0;
 
+
+/*
+ * Type definition for all the supported translations that midi2midi can
+ * perform.
+ */
 typedef enum {
   TT_NONE,
   TT_NOTE_TO_NOTE,
@@ -151,6 +188,10 @@ typedef enum {
   TT_NOTE_TO_MMC
 } translation_type;
 
+
+/*
+ * Type definition for a translation table entry.
+ */
 typedef struct {
   translation_type type;
   char value;
@@ -158,8 +199,9 @@ typedef struct {
   int line;
 } translation;
 
+
 /*
- * Command usage
+ * Command usage providing a simple help for the user.
  */
 static void usage(char *app_name) {
   printf("USAGE: %s -c <filename> [-dvh]\n\n"
@@ -169,7 +211,7 @@ static void usage(char *app_name) {
 	 " -d, --debug       Output debug information.\n"
 	 "\n"
          "This tool is a useful MIDI proxy if you own studio equipment that\n"
-         "will not speak to eachother the way you want to. Just route your\n"
+         "will not speak to each other the way you want to. Just route your\n"
          "MIDI signals through an instance of this and make magic happen!\n"
          "\n"
 	 "Author: AiO\n", app_name);
@@ -188,7 +230,8 @@ static void quit_callback(int sig) {
 
 
 /*
- * Parse configuration file and construct a translation table.
+ * Parse the specified configuration file and construct translation tables
+ * for both MIDI notes and MIDI Continuous Controls.
  */
 static void translation_table_init(const char *filename,
 				   translation note_table[255],
@@ -208,13 +251,12 @@ static void translation_table_init(const char *filename,
   debug("Reading file '%s'", filename);
 
   /*
-   * Just set the translation tables for both notes and CCs to defaults.
+   * Just set the translation tables for both notes and MIDI Continuous
+   * Controls to defaults.
    */
   for (i = 0; i < 255; i++) {
-    note_table[i].type = TT_NONE;
-    note_table[i].value = i;
-    cc_table[i].type = TT_NONE;
-    cc_table[i].value = i;
+    cc_table[i].type = note_table[i].type = TT_NONE;
+    cc_table[i].value = note_table[i].value = i;
     cc_table[i].last_value = -1;
   }
 
@@ -231,11 +273,11 @@ static void translation_table_init(const char *filename,
     /*
      * Parse the current line. First line is the file version, the second
      * line is the name of th MIDI-port to upen and the rest is the actual
-     * MIDI note conversion table defintion.
+     * MIDI note conversion table definition.
      */
     if (1 == line_number) {
       /*
-       * Make sure that we can hande the file version :)
+       * Make sure that we can handle the file version :)
        */
       fscanf(fd, "midi2midi-config-1.1\n");
 
@@ -253,7 +295,8 @@ static void translation_table_init(const char *filename,
         fscanf(fd, "midi2midi-config-1.0\n");
 
         if (errno != 0) {
-          error("The file '%s' is not a midi2midi config file.", filename);
+          error("The file '%s' is not a midi2midi configuration file.",
+                filename);
         }
       }
       continue;
@@ -264,7 +307,7 @@ static void translation_table_init(const char *filename,
        *       overrun posibillity here.
        */
       /*
-       * Get the name of the instance from the config file.
+       * Get the name of the instance from the configuration file.
        */
       fgets(port_name, 255, fd);
       /*
@@ -275,7 +318,7 @@ static void translation_table_init(const char *filename,
       debug("Read port name '%s'", port_name);
 
       if (0 != errno) {
-        error("Could not get MIDI port name from config file '%s'.",
+        error("Could not get MIDI port name from configuration file '%s'.",
               filename);
       }
       continue;
@@ -287,7 +330,7 @@ static void translation_table_init(const char *filename,
        */
       fscanf(fd, "%d%c%d\n", &from, &c, &to);
 
-      debug("Reading line %d %d%c%d", line_number, from, c, to);
+      debug("Reading line %d '%d%c%d'", line_number, from, c, to);
 
       if (0 != errno) {
 	error("Error reading file '%s'.", filename);
@@ -316,6 +359,10 @@ static void translation_table_init(const char *filename,
         error("Separator '%c' is not valid in file '%s'.", c, filename);
       }
 
+      /*
+       * Perform some sanity checking on the from-value (since it can only be
+       * between 0 and 255 (or actually 0 and 127 in the MIDI world)
+       */
       if ((0 > from) || (255 < from)) {
         error("Line %d of '%s' has an invalid from value (must be 0-255).",
               line_number, filename);
@@ -323,9 +370,9 @@ static void translation_table_init(const char *filename,
 
       if (TT_NOTE_TO_JACK != type) {
         /*
-         * Perform some sanity checking.
+         * Perform some sanity checking on the to-value (since it can only be
+         * between 0 and 255 (or actually 0 and 127 in the MIDI world)
          */
-
         if ((0 > to) || (255 < to)) {
           error("Line %d of '%s' has an invalid to value (must be 0-255).",
                 line_number, filename);
@@ -334,7 +381,7 @@ static void translation_table_init(const char *filename,
       else {
         /*
          * Hard wire translate all the possible jack translation values
-         * and make them as similar as posible to MMC.
+         * and make them as similar as possible to MIDI Machine Control.
          */
         if (1 == to) {
           to = JT_STOP;
@@ -358,7 +405,7 @@ static void translation_table_init(const char *filename,
       }
 
       /*
-       * Insert the note tranform in the translation table.
+       * Insert the note transformation in the translation table.
        */
       switch (type) {
       case TT_NOTE_TO_NOTE:
@@ -377,32 +424,12 @@ static void translation_table_init(const char *filename,
         note_table[from].type = type;
         note_table[from].value = to;
 
-        /*
-         * Just some debugging trivia.
-         */
-        switch(type) {
-        case TT_NOTE_TO_NOTE:
-          debug("Every %d note will be translated to note %d", from, to);
-          break;
-        case TT_NOTE_TO_JACK:
-          debug("Every %d note will be translated to jack transport %d (raw)",
-                from, to);
-          break;
-        case TT_NOTE_TO_MMC:
-          debug("Every %d note will be translated to MIDI Machine Control %d",
-                from, to);
-          break;
-        default:
-          error("This should never happen type: %d.", type);
-          break;
-        }
-
         break;
       case TT_CC_TO_CC:
       case TT_CC_TO_CC_IF_VALUE_CHANGE:
         /*
-         * Make sure that there are no duplicates in the CC translation
-         * table.
+         * Make sure that there are no duplicates in the MIDI Contentious
+         * Control translation table.
          */
         if (TT_NONE != cc_table[from].type) {
           error("CC value %d is already translated on line %d with value %d"
@@ -412,22 +439,6 @@ static void translation_table_init(const char *filename,
         }
         cc_table[from].type = type;
         cc_table[from].value = to;
-
-        /*
-         * Just some debugging trivia.
-         */
-        switch(type) {
-        case TT_CC_TO_CC:
-          debug("Every %d CC will be translated to %d", from, to);
-          break;
-        case TT_CC_TO_CC_IF_VALUE_CHANGE:
-          debug("Every %d CC will be translated to %d if the value changes",
-                from, to);
-          break;
-        default:
-          error("This should never happen type: %d.", type);
-          break;
-        }
         break;
 
       default:
@@ -484,73 +495,104 @@ static void midi2midi(snd_seq_t *seq_handle,
 
         switch (note_table[ev->data.note.note].type) {
 
-        case TT_NOTE_TO_NOTE:
-          /*
-           * Prepare to just forward a translated note.
-           */
-          debug("Translating note %d to note %d",
-                ev->data.note.note,
-                note_table[ev->data.note.note].value);
-          ev->data.note.note = note_table[ev->data.note.note].value;
-          send_midi = 1;
-          break;
+          case TT_NOTE_TO_NOTE: {
+            /*
+             * Prepare to just forward a translated note.
+             */
+            debug("Translating note %d to note %d",
+                  ev->data.note.note,
+                  note_table[ev->data.note.note].value);
 
-        case TT_NOTE_TO_JACK:
-          /*
-           * Send a jack transport command.
-           */
-          jack_transport_send(jack_client,
-                              note_table[ev->data.note.note].value,
-                              ev->data.note.velocity);
-          break;
+            ev->data.note.note = note_table[ev->data.note.note].value;
+            send_midi = 1;
 
-        default:
-          error("Note translation %d is not implemented yet.",
-                note_table[ev->data.note.note].type);
-          break;
+            break;
+          }
+          case TT_NOTE_TO_JACK: {
+            /*
+             * Send a jack transport command.
+             */
+            jack_transport_send(jack_client,
+                                note_table[ev->data.note.note].value,
+                                ev->data.note.velocity);
+
+            break;
+          }
+          default: {
+            /*
+             * Some note-translation that is not supported should
+             * end-up here.
+             */
+            error("Note translation %d is not implemented yet.",
+                  note_table[ev->data.note.note].type);
+
+            break;
+          }
         }
 
       }
       else if ((SND_SEQ_EVENT_CONTROLLER == ev->type) &&
                (TT_NONE != cc_table[ev->data.control.param].type)) {
-
+        /*
+         * When midi2midi receives a MIDI Continuous Controller message and
+         * the from-value (index) is set in the translation table for MIDI
+         */
         switch (note_table[ev->data.note.note].type) {
 
-        case TT_CC_TO_CC:
-          debug("Translating CC param %d to CC param %d",
-                ev->data.control.param,
-                cc_table[ev->data.control.param].value);
-          ev->data.control.param = cc_table[ev->data.control.param].value;
-          send_midi = 1;
-          break;
-
-        case TT_CC_TO_CC_IF_VALUE_CHANGE:
-          /*
-           * Only forward value if the parameter value actually changed.
-           */
-          if (cc_table[ev->data.control.param].last_value !=
-              ev->data.control.value) {
-
-            debug("Translating CC param %d to CC param %d",
+          case TT_CC_TO_CC: {
+            /*
+             * Prepare to translate a MIDI Continuous Controller into another
+             * MIDI Continuous Controller according to the configuration file.
+             */
+            debug("Translating MIDI CC %d to MIDI CC %d",
                   ev->data.control.param,
                   cc_table[ev->data.control.param].value);
+
             ev->data.control.param = cc_table[ev->data.control.param].value;
-
-            cc_table[ev->data.control.param].last_value =
-              ev->data.control.value;
-
             send_midi = 1;
+
+            break;
           }
-          break;
+          case TT_CC_TO_CC_IF_VALUE_CHANGE: {
+            /*
+             * Only translate a MIDI Continuous Controller into another MIDI
+             * Continuous Controller value if the parameter value actually
+             * changed.
+             */
+            if (cc_table[ev->data.control.param].last_value !=
+                ev->data.control.value) {
+              /*
+               * The new value seem to be different than the last translated
+               * one so lets produce the translation.
+               */
 
-        default:
-          error("CC param translation %d is not implemented yet.",
-                note_table[ev->data.note.note].type);
-          break;
+              debug("Translating MIDI CC %d to MIDI CC %d since value changed",
+                    ev->data.control.param,
+                    cc_table[ev->data.control.param].value);
 
+              ev->data.control.param = cc_table[ev->data.control.param].value;
+
+              cc_table[ev->data.control.param].last_value =
+                ev->data.control.value;
+
+              send_midi = 1;
+            }
+
+            break;
+          }
+          default: {
+            error("MIDI Continuous Controller translation %d is not "
+                  "implemented yet.",
+                  note_table[ev->data.note.note].type);
+
+            break;
+          }
         }
       }
 
+      /*
+       * If a new MIDI event was prepared it must be forwarded.
+       */
       if (1 == send_midi) {
         /*
          * Output the translated note to the MIDI output port.
@@ -559,6 +601,9 @@ static void midi2midi(snd_seq_t *seq_handle,
         snd_seq_event_output_direct(seq_handle, ev);
       }
 
+      /*
+       * Get back the system memory allocated for the incoming MIDI event.
+       */
       snd_seq_free_event(ev);
 
     } while (snd_seq_event_input_pending(seq_handle, 0) > 0);
@@ -681,7 +726,7 @@ int main(int argc, char *argv[]) {
   }
 
   /*
-   * Cleanup resources.
+   * Cleanup resources and return memory to system.
    */
   sequencer_poller_delete(pfd);
   sequencer_delete(seq_handle);
