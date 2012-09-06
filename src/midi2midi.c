@@ -24,7 +24,7 @@
  * Author: AiO <aio at aio dot nu>
  *
  * Simple MIDI to MIDI converter. Original idea was to translate
- * digital percusion notes to other notes. For example to be able to
+ * digital percussion notes to other notes. For example to be able to
  * in a simple way map digital drums against various soft-wares and hard-wares.
  *
  * Remember it is a hack!!! I do not take any responsibility for your
