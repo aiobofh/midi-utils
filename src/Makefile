@@ -1,17 +1,46 @@
 #!/usr/bin/env make
 #
-# Makefile for src-folder for midi-utils
+# Copyright (C)
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+#
+# About
+# -----
+#
+# Author: AiO <aio at aio dot nu>
+#
+# Makefile for src-folder for midi-utils.
 #
 
-CFLAGS=-pedantic -Wall -std=c99 -g
+JACKFLAGS:=`pkg-config --cflags --libs jack`
+ALSAFLAGS:=`pkg-config --cflags --libs alsa`
+CFLAGS=-pedantic -Wall -std=c99 -g -lm
 
-all: note2note note2jacktransport
+SRCS=quit.c error.c debug.c sequencer.c jack_transport.c midi2midi.c
+OBJS=$(SRCS:.c=.o)
 
-note2jacktransport: quit.c note2jacktransport.c
-	gcc -o $@ note2jacktransport.c quit.c -lasound -ljack $(CFLAGS)
+all: .depend midi2midi
 
-note2note: quit.c note2note.c
-	gcc -o $@ note2note.c quit.c -lasound $(CFLAGS)
+%.o: %.c Makefile
+	$(CC) -o $@ -c $< $(CFLAGS)
+
+midi2midi: $(OBJS)
+	$(CC) -o $@ $(OBJS) $(CFLAGS) $(JACKFLAGS) $(ALSAFLAGS)
+
+.depend:
+	$(CC) -MM $(SRCS) > .depend
 
 clean:
-	rm -rf *~ note2note note2jacktransport
+	$(RM) *~ midi2midi $(OBJS) .depend
