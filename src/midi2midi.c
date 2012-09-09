@@ -53,6 +53,20 @@
  * separated by a single character representing which kind of translation that
  * need to be done.
  *
+ * Command line options
+ * - - - - - - - - - -
+ *
+ * -h, --help                   Show this help text.
+ * -v, --version                Display version information.
+ * -c, --config=file            Note translation configuration file
+ *                              to load. See manual for file format.
+ * -n, --client_name=name       Name of the ALSA/Jack client. This
+ *                              overrides line 2 in the config file.
+ * -p, --program-repeat-prevent Prevent a program select on a MIDI
+ *                              device to repeated times.
+ * -d, --debug                  Output debug information.
+ *
+ *
  * Example configuration file (roland_td9-mssiah_sid.m2m)
  * - - - - - - - - - - - - - - - - - - - - - - - - - - -
  *
@@ -110,26 +124,6 @@
  * separator.
  *
  *
- * Repeated program change prevention
- * ----------------------------------
- *
- * There is another version of this translation only being performed if the
- * actual MSB value for the controller is changed. This is perfect for example
- * when you want to prevent a MIDI device to change program if the program
- * is already set. This is done with the 'P' separator.
- *
- * This can be done with:
- *
- * 0P0
- *
- * MIDI Continuous Controller 0 is the "Program change" controller.
- *
- * If you (like me) have a microKORG XL and are annoyed by seq24 not being
- * able to configure the synthesiser in a usable way (if you set the program
- * change in every pattern for easy live performance) since the micro tend to
- * scrap all effects at a program change this feature is really nifty.
- *
- *
  * Note to jack transport translation
  * ----------------------------------
  *
@@ -179,7 +173,7 @@
  * Set this variable to 1 to exit the main loop cleanly.
  */
 static int quit = 0;
-static int program_change_prevention = 0;
+
 
 /*
  * Type definition for all the supported translations that midi2midi can
@@ -192,6 +186,18 @@ typedef enum {
   TT_NOTE_TO_JACK,
   TT_NOTE_TO_MMC
 } translation_type;
+
+
+/*
+ * Type definition for keeping track of the needed resource capabilities
+ * for the running instance of this program.
+ */
+typedef enum {
+  CB_NONE = 0,
+  CB_ALSA_MIDI_IN = 1,
+  CB_ALSA_MIDI_OUT = 2,
+  CB_JACK_TRANSPORT_OUT = 4
+} capability;
 
 
 /*
@@ -209,16 +215,16 @@ typedef struct {
  * Command usage providing a simple help for the user.
  */
 static void usage(char *app_name) {
-  printf("USAGE: %s -c <filename> -n <client_name> [-dvh]\n\n"
-	 " -h, --help                  Show this help text.\n"
-	 " -v, --version               Display version information.\n"
-	 " -c, --config=file           Note translation configuration file\n"
-         "                             to load. See manual for file format.\n"
-         " -n, --client_name=name      Name of the ALSA/Jack client. This\n"
-         "                             overrides line 2 in the config file.\n"
-         " -p, --program-repat-prevent Prevent a program select on a MIDI\n"
-         "                             device to repeated times.\n"
-	 " -d, --debug                 Output debug information.\n"
+  printf("USAGE: %s [-c <file name>] [-n <client_name>] [-hvpd]\n\n"
+	 " -h, --help                   Show this help text.\n"
+	 " -v, --version                Display version information.\n"
+	 " -c, --config=file            Note translation configuration file\n"
+         "                              to load. See manual for file format.\n"
+         " -n, --client_name=name       Name of the ALSA/Jack client. This\n"
+         "                              overrides line 2 in the config file.\n"
+         " -p, --program-repeat-prevent Prevent a program select on a MIDI\n"
+         "                              device to repeated times.\n"
+	 " -d, --debug                  Output debug information.\n"
 	 "\n"
          "This tool is a useful MIDI proxy if you own studio equipment that\n"
          "will not speak to each other the way you want to. Just route your\n"
@@ -243,22 +249,14 @@ static void quit_callback(int sig) {
  * Parse the specified configuration file and construct translation tables
  * for both MIDI notes and MIDI Continuous Controls.
  */
-static void translation_table_init(const char *filename,
-				   translation note_table[255],
-                                   translation cc_table[255],
-				   char *port_name) {
+static capability translation_table_init(const char *filename,
+                                         translation note_table[255],
+                                         translation cc_table[255],
+                                         char *port_name,
+                                         capability capabilities) {
   FILE *fd;
   int line_number = 0;
   int i;
-
-  /*
-   * Open the specified configuration file.
-   */
-  if ((fd = fopen(filename, "r")) == NULL) {
-    error("Unable to open file '%s'.", filename);
-  }
-
-  debug("Reading file '%s'", filename);
 
   /*
    * Just set the translation tables for both notes and MIDI Continuous
@@ -269,6 +267,19 @@ static void translation_table_init(const char *filename,
     cc_table[i].value = note_table[i].value = i;
     cc_table[i].last_value = -1;
   }
+
+  if (NULL == filename) {
+    return capabilities;
+  }
+
+  /*
+   * Open the specified configuration file.
+   */
+  if ((fd = fopen(filename, "r")) == NULL) {
+    error("Unable to open file '%s'.", filename);
+  }
+
+  debug("Reading file '%s'", filename);
 
   /*
    * Read each line of the configuration file and assign notes accordingly.
@@ -282,7 +293,7 @@ static void translation_table_init(const char *filename,
 
     /*
      * Parse the current line. First line is the file version, the second
-     * line is the name of th MIDI-port to upen and the rest is the actual
+     * line is the name of the MIDI-port to use and the rest is the actual
      * MIDI note conversion table definition.
      */
     if (1 == line_number) {
@@ -312,20 +323,30 @@ static void translation_table_init(const char *filename,
       continue;
     }
     else if (2 == line_number) {
+      char buf[255];
       /*
        * TODO: Make this a bit cleaner since there is a potential buffer
-       *       overrun posibillity here.
+       *       overrun possibility here.
        */
       /*
        * Get the name of the instance from the configuration file.
        */
-      fgets(port_name, 255, fd);
+      fgets(buf, 255, fd);
       /*
        * Trim it and make sure that we have a null-terminated string.
        */
-      port_name[strlen(port_name)-1] = 0;
+      buf[strlen(buf)-1] = 0;
 
-      debug("Read port name '%s'", port_name);
+      debug("Read port name '%s'", buf);
+
+      /*
+       * If the -n flag was not provided to the program, lets set the
+       * port name to the line that was just found. Otherwise just ignore
+       *i it.
+       */
+      if (strlen(port_name) > 1) {
+        strncpy(port_name, buf, 255);
+      }
 
       if (0 != errno) {
         error("Could not get MIDI port name from configuration file '%s'.",
@@ -353,31 +374,25 @@ static void translation_table_init(const char *filename,
         case '>': {
           type = TT_CC_TO_CC;
 	  debug("Identified line as TT_CC_TO_CC (%c)", c);
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
         case ':': {
           type = TT_NOTE_TO_NOTE;
 	  debug("Identified line as TT_NOTE_TO_NOTE (%c)", c);
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
         case 'J': {
 	  debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
           type = TT_NOTE_TO_JACK;
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_JACK_TRANSPORT_OUT);
           break;
         }
         case 'M': {
 	  debug("Identified line as TT_NOTE_TO_MMC (%c)", c);
           type = TT_NOTE_TO_MMC;
-          break;
-        }
-        case 'P': {
-	  if (1 == program_change_prevention) {
-	    error("You can only turn on program change prevention once on"
-		  " line %d", line_number);
-	  }
-	  debug("Identified line as PROGRAM_CHANGE_PREVENTION (%c)", c);
-	  program_change_prevention = 1;
-	  continue;
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
         default: {
@@ -482,6 +497,8 @@ static void translation_table_init(const char *filename,
   debug("Reached end of file '%s'", filename);
 
   fclose(fd);
+
+  return capabilities;
 }
 
 /*
@@ -494,11 +511,20 @@ static void midi2midi(snd_seq_t *seq_handle,
 		      int in_port,
 		      int out_port,
 		      translation note_table[256],
-                      translation cc_table[256]) {
+                      translation cc_table[256],
+                      int program_change_prevention) {
   /*
    * Note parameters
    */
   snd_seq_event_t *ev;
+
+  /*
+   * For now an instance which can not handle ALSA MIDI input at all is not
+   * supported.
+   */
+  if (NULL == seq_handle) {
+    return;
+  }
 
   /*
    * Poll the ALSA midi interface for events.
@@ -605,7 +631,7 @@ static void midi2midi(snd_seq_t *seq_handle,
 	   * The new value seem to be different than the last translated
 	   * one so lets produce the translation.
 	   */
-	  
+
 	  debug("Program changed to %d value changed",
 		ev->data.control.param,
 		cc_table[ev->data.control.param].value);
@@ -621,7 +647,7 @@ static void midi2midi(snd_seq_t *seq_handle,
 		ev->data.control.param);
 	  send_midi = 0;
 	}
-	
+
       }
 
       /*
@@ -653,19 +679,27 @@ int main(int argc, char *argv[]) {
   char *app_name = APPNAME;
   char port_name[255];
   char *config_file = NULL;
+  int program_change_prevention = 0;
+
+  /*
+   * This variable holds a bit pattern describing what resources need to be
+   * allocated. (ALSA/Jack)
+   */
+  capability capabilities;
 
   /*
    * Handles and IDs to ALSA stuff.
    */
-  snd_seq_t *seq_handle;
+  snd_seq_t *seq_handle = NULL;
   int in_port, out_port;
-  int npfd;
+  int *in_port_ptr, *out_port_ptr;
+  int npfd = 0;
   struct pollfd *pfd;
 
   /*
    * Handles for Jack client stuff.
    */
-  jack_client_t *jack_client;
+  jack_client_t *jack_client = NULL;
 
   /*
    * This is where the note translation-table is stored.
@@ -673,16 +707,21 @@ int main(int argc, char *argv[]) {
   translation note_table[255];
   translation cc_table[255];
 
+  in_port_ptr = out_port_ptr = NULL;
+
   /*
    * Command line options variables.
    */
   static struct option long_options[] = {
     {"debug", no_argument, NULL,  'd'},
     {"config", required_argument, NULL,  'c'},
+    {"name", required_argument, NULL, 'n'},
     {"help", no_argument, NULL, 'h'},
     {"version", no_argument, NULL, 'v'},
     {0, 0, 0,  0 }
   };
+
+  strcpy(port_name, "Unknown name");
 
   /*
    * Handle command line options.
@@ -690,7 +729,7 @@ int main(int argc, char *argv[]) {
   while(1) {
     int option_index = 0;
     int c;
-    c = getopt_long(argc, argv, "dc:hv?",
+    c = getopt_long(argc, argv, "dn:c:hpv?",
 		    long_options, &option_index);
     if (c == -1) {
       break;
@@ -706,7 +745,16 @@ int main(int argc, char *argv[]) {
         break;
       }
       case 'p': {
-
+        program_change_prevention = 1;
+        /*
+         * The repeated-program-change-prevention feature requires MIDI in and
+         * out.
+         */
+        capabilities = CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT;
+        break;
+      }
+      case 'n': {
+        strncpy(port_name, optarg, 254);
         break;
       }
       case 'v': {
@@ -730,22 +778,38 @@ int main(int argc, char *argv[]) {
   /*
    * Make sure that the all so important configuration file is provided.
    */
-  if (config_file == NULL) {
-    error("No configuration file provided use %s -h for more information.",
+  if ((config_file == NULL) && (strlen(port_name) ==  0)) {
+    error("No configuration file, nor a client name was provided use %s "
+          "-h for more information.",
           app_name);
   }
 
   /*
    * Read the configuration file and get all the essential information.
    */
-  translation_table_init(config_file, note_table, cc_table, port_name);
+  capabilities = translation_table_init(config_file,
+                                        note_table,
+                                        cc_table,
+                                        port_name,
+                                        capabilities);
 
   /*
-   * Set-up ALSA MIDI.
+   * Set-up ALSA MIDI and Jack Transport depending on how the program
+   * instance is set-up.
    */
-  seq_handle = sequencer_new(&in_port, &out_port, port_name);
-  pfd = sequencer_poller_new(seq_handle, &npfd);
-  jack_client = jack_transport_new(port_name);
+  if (CB_ALSA_MIDI_IN == (capabilities & (CB_ALSA_MIDI_IN))) {
+    in_port_ptr = &in_port;
+  }
+  if (CB_ALSA_MIDI_IN == (capabilities & (CB_ALSA_MIDI_OUT))) {
+    out_port_ptr = &out_port;
+  }
+  if ((NULL != in_port_ptr) || (NULL != out_port_ptr)) {
+    seq_handle = sequencer_new(in_port_ptr, out_port_ptr, port_name);
+    pfd = sequencer_poller_new(seq_handle, &npfd);
+  }
+  if (CB_JACK_TRANSPORT_OUT == (capabilities & CB_JACK_TRANSPORT_OUT)) {
+    jack_client = jack_transport_new(port_name);
+  }
 
   /*
    * Ensure a clean exit in as many situations as possible.
@@ -763,15 +827,20 @@ int main(int argc, char *argv[]) {
               in_port,
               out_port,
               note_table,
-              cc_table);
+              cc_table,
+              program_change_prevention);
   }
 
   /*
    * Cleanup resources and return memory to system.
    */
-  sequencer_poller_delete(pfd);
-  sequencer_delete(seq_handle);
-  jack_transport_delete(jack_client);
+  if ((NULL != in_port_ptr) || (NULL != out_port_ptr)) {
+    sequencer_poller_delete(pfd);
+    sequencer_delete(seq_handle);
+  }
+  if (NULL != jack_client) {
+    jack_transport_delete(jack_client);
+  }
 
   /*
    * Make a clean exit.
