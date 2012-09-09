@@ -44,9 +44,18 @@ snd_seq_t *sequencer_new(int *in_port_ptr,
 
   char input_name[255];
   char output_name[255];
+  int mode = 0;
 
   sprintf(input_name, "%s - In", port_name);
   sprintf(output_name, "%s - Out", port_name);
+
+  if (NULL != in_port_ptr) {
+    mode = mode | SND_SEQ_OPEN_INPUT;
+  }
+  if (NULL != out_port_ptr) {
+    mode = mode | SND_SEQ_OPEN_OUTPUT;
+  }
+
 
   /*
    * Open an ALSA MIDI input and output ports.
@@ -56,20 +65,24 @@ snd_seq_t *sequencer_new(int *in_port_ptr,
   }
   snd_seq_set_client_name(seq_handle, port_name);
 
-  *in_port_ptr = snd_seq_create_simple_port(seq_handle, input_name,
-					    SND_SEQ_PORT_CAP_WRITE |
-					    SND_SEQ_PORT_CAP_SUBS_WRITE,
-					    SND_SEQ_PORT_TYPE_APPLICATION);
-  if (*in_port_ptr < 0) {
-    error("Error creating sequencer input port for '%s'.", port_name);
+  if (in_port_ptr) {
+    *in_port_ptr = snd_seq_create_simple_port(seq_handle, input_name,
+                                              SND_SEQ_PORT_CAP_WRITE |
+                                              SND_SEQ_PORT_CAP_SUBS_WRITE,
+                                              SND_SEQ_PORT_TYPE_APPLICATION);
+    if (*in_port_ptr < 0) {
+      error("Error creating sequencer input port for '%s'.", port_name);
+    }
   }
 
-  *out_port_ptr = snd_seq_create_simple_port(seq_handle, output_name,
-					     SND_SEQ_PORT_CAP_READ |
-					     SND_SEQ_PORT_CAP_SUBS_READ,
-					     SND_SEQ_PORT_TYPE_APPLICATION);
-  if (*out_port_ptr < 0) {
-    error("Error creating sequencer output port for '%s'.", port_name);
+  if (out_port_ptr) {
+    *out_port_ptr = snd_seq_create_simple_port(seq_handle, output_name,
+                                               SND_SEQ_PORT_CAP_READ |
+                                               SND_SEQ_PORT_CAP_SUBS_READ,
+                                               SND_SEQ_PORT_TYPE_APPLICATION);
+    if (*out_port_ptr < 0) {
+      error("Error creating sequencer output port for '%s'.", port_name);
+    }
   }
 
   return seq_handle;

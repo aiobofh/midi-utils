@@ -568,7 +568,7 @@ int main(int argc, char *argv[]) {
    * This variable holds a bit pattern describing what resources need to be
    * allocated. (ALSA/Jack)
    */
-  capability capabilities;
+  capability capabilities = CB_NONE;
 
   /*
    * Handles and IDs to ALSA stuff.
@@ -683,7 +683,7 @@ int main(int argc, char *argv[]) {
   if (CB_ALSA_MIDI_IN == (capabilities & (CB_ALSA_MIDI_IN))) {
     in_port_ptr = &in_port;
   }
-  if (CB_ALSA_MIDI_IN == (capabilities & (CB_ALSA_MIDI_OUT))) {
+  if (CB_ALSA_MIDI_OUT == (capabilities & (CB_ALSA_MIDI_OUT))) {
     out_port_ptr = &out_port;
   }
   if ((NULL != in_port_ptr) || (NULL != out_port_ptr)) {
