@@ -1,9 +1,9 @@
 MIDI-utils
 ==========
 
-This is a set of useful MIDI-translation tools for Linux-based Digital Audio
-Workstations. These tools are mainly simplistic hacks but they do come in
-handy in some cases. At least in my studio.
+This is a set (one for now) of useful MIDI-translation tools for Linux-based
+Digital Audio Workstations. These tools are mainly simplistic hacks but they
+do come in handy in some cases. At least in my studio.
 
 midi2midi
 ---------
@@ -11,6 +11,10 @@ midi2midi
 A simple program that translates input MIDI-notes into other MIDI-notes or
 MIDI CC messages to other MIDI CC messages or even MIDI-notes into Jack
 Transport commands using small configuration files.
+
+The whole purpose for this program being written is that basically all MIDI
+equipment (at least the ones I own) have their own little quirks. This is
+just a way to circumvent these quirks.
 
 This comes in handy when you want to hook up your favorite digital drum-set
 to another application or hardware that does not map the correct
@@ -22,3 +26,156 @@ charm, and I now have realized that it comes in handy if I'd like to sequence
 using e.g. Rosegarden and with as little configuration as possible be able to
 replace my TD-9 module as sound source by using e.g. Hydrogen. These two does
 not map notes in the same way.
+
+Another nice feature is to prevent repeated program change commands from
+being sent to a MIDI device that already had received the same program
+number. This became useful to me when I started making music with the
+wonderful pattern-based sequencer seq24. But when I put a program change
+event in the beginning of a pattern it was sent to my microKORG XL every time
+the pattern looped. And since the microKORG XL drops all effects every time
+this happens I got some unfortunate "silence" at teach loop start. Check out
+the -p flag if you experience the same problems.
+
+
+Requirements
+- - - - - -
+
+libasound2-dev
+libjack2-dev
+
+How-to Compile
+- - - - - - -
+
+make
+
+How-to install
+- - - - - - -
+
+make install
+
+How-to run
+- - - - -
+
+midi2midi -c configfile.m2m
+
+The configuration file format is quite straight forward. You have a value
+which can be either a MIDI note or a MIDI Continuous Controller that is to
+be translated into another MIDI note, MIDI Continuous Controller, jack
+transport command or a MIDI Machine Control command. These two values are
+separated by a single character representing which kind of translation that
+need to be done.
+
+midi2midi -p -n ProgramChangePreventor
+
+This will only start the program with the -p flag and name the ALSA MIDI
+ports to ProgramChangePreventor reading no configuration at all.
+
+Or you can override the ALSA port names and Jack Transport names with the
+-n flag like this:
+
+midi2midi -c configfile.m2m -n RealName
+
+
+Command line options
+-  -  -  -  -  -  -
+
+-h, --help                   Show help text.
+-v, --version                Display version information.
+-c, --config=file            Note translation configuration file
+                             to load. See manual for file format.
+-n, --client_name=name       Name of the ALSA/Jack client. This
+                             overrides line 2 in the config file.
+-p, --program-repeat-prevent Prevent a program select on a MIDI
+                             device to repeated times.
+-d, --debug                  Output debug information.
+
+
+Example configuration file (roland_td9-mssiah_sid.m2m)
+-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+
+midi2midi-config-1.0
+Roland TD-9/MSSIAH
+26:46
+47:44
+48:43
+46:42
+45:41
+43:41
+50:39
+38:38
+36:36
+
+
+Example configuration file (event_ezbus2jack_mixer+transport.m2m)
+-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+
+midi2midi-config-1.1
+Event EZ-Bus/Jack Mixer+Transport
+12>13
+13>15
+14>17
+15>19
+16>21
+17>23
+18>25
+94J1
+93J2
+92J4
+91J5
+
+You can combine both MIDI note to MIDI note and MIDI note to MIDI Continuous
+Control messages in the same configuration file.
+
+
+MIDI note to MIDI note translation
+- - - - - - - - - - - - - - - - -
+
+Separator: ':'
+
+If you have some device producing MIDI notes that does not confirm to some
+other device you might want to be able to translate the note value into
+something different.
+
+This comes in handy for example with percussion notes. In the example above
+I have a Roland TD-9 drum module sending notes for kick, snare, hi-hat and
+so on that does not comply to the MSSIAH Drummer application. Hence I need
+translate each note into another note, keeping velocity.
+
+
+MIDI Continuous Controller to MIDI Continuous Controller translation
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Separator: '>'
+
+This works in exactly the same way as notes, but with the difference that
+the translation is done on MIDI Continuous Controls instead of notes.
+
+This comes in handy if you have a hardware mixer which sends a specific
+MIDI Continuous Control for a channel strip potentiometer but the program
+you want to talk to expects another one. This is done with the '>'
+separator.
+
+
+Note to jack transport translation
+- - - - - - - - - - - - - - - - -
+
+Separator: 'J'
+
+This can come in handy if you want to use a keyboard or some other device
+sending MIDI notes to produce jack transport commands so that many
+audio applications can start/stop playing, rewinding, forwarding and
+such things in synchronised harmony using jack transport.
+
+Command matrix:
+
+1 = PLAY
+2 = STOP
+4 = FAST FORWARD
+5 = REWIND
+47 = WHEEL
+
+
+Note to MIDI Machine Control
+- - - - - - - - - - - - - -
+
+NOT IMPLEMENTED YET :(
