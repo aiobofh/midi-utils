@@ -205,11 +205,16 @@ typedef struct {
  * Command usage providing a simple help for the user.
  */
 static void usage(char *app_name) {
-  printf("USAGE: %s -c <filename> [-dvh]\n\n"
-	 " -h, --help        Show this help text.\n"
-	 " -v, --version     Display version information.\n"
-	 " -c, --config=file Note translation configuration file to load.\n"
-	 " -d, --debug       Output debug information.\n"
+  printf("USAGE: %s -c <filename> -n <client_name> [-dvh]\n\n"
+	 " -h, --help                  Show this help text.\n"
+	 " -v, --version               Display version information.\n"
+	 " -c, --config=file           Note translation configuration file\n"
+         "                             to load. See manual for file format.\n"
+         " -n, --client_name=name      Name of the ALSA/Jack client. This\n"
+         "                             overrides line 2 in the config file.\n"
+         " -p, --program-repat-prevent Prevent a program select on a MIDI\n"
+         "                             device to repeated times.\n"
+	 " -d, --debug                 Output debug information.\n"
 	 "\n"
          "This tool is a useful MIDI proxy if you own studio equipment that\n"
          "will not speak to each other the way you want to. Just route your\n"
@@ -681,6 +686,10 @@ int main(int argc, char *argv[]) {
       }
       case 'c': {
         config_file = optarg;
+        break;
+      }
+      case 'p': {
+
         break;
       }
       case 'v': {
