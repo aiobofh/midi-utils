@@ -95,10 +95,11 @@
  * so on that does not comply to the MSSIAH Drummer application. Hence I need
  * translate each note into another note, keeping velocity.
  *
+ *
  * MIDI Continuous Controller to MIDI Continuous Controller translation
  * --------------------------------------------------------------------
  *
- * Separator: '>' or 'P'
+ * Separator: '>'
  *
  * This works in exactly the same way as notes, but with the difference that
  * the translation is done on MIDI Continuous Controls instead of notes.
@@ -107,6 +108,10 @@
  * MIDI Continuous Control for a channel strip potentiometer but the program
  * you want to talk to expects another one. This is done with the '>'
  * separator.
+ *
+ *
+ * Repeated program change prevention
+ * ----------------------------------
  *
  * There is another version of this translation only being performed if the
  * actual MSB value for the controller is changed. This is perfect for example
@@ -174,7 +179,7 @@
  * Set this variable to 1 to exit the main loop cleanly.
  */
 static int quit = 0;
-
+static int program_change_prevention = 0;
 
 /*
  * Type definition for all the supported translations that midi2midi can
@@ -184,7 +189,6 @@ typedef enum {
   TT_NONE,
   TT_NOTE_TO_NOTE,
   TT_CC_TO_CC,
-  TT_CC_TO_CC_IF_VALUE_CHANGE,
   TT_NOTE_TO_JACK,
   TT_NOTE_TO_MMC
 } translation_type;
@@ -348,22 +352,32 @@ static void translation_table_init(const char *filename,
       switch (c) {
         case '>': {
           type = TT_CC_TO_CC;
+	  debug("Identified line as TT_CC_TO_CC (%c)", c);
           break;
         }
         case ':': {
           type = TT_NOTE_TO_NOTE;
+	  debug("Identified line as TT_NOTE_TO_NOTE (%c)", c);
           break;
         }
         case 'J': {
+	  debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
           type = TT_NOTE_TO_JACK;
           break;
         }
         case 'M': {
+	  debug("Identified line as TT_NOTE_TO_MMC (%c)", c);
           type = TT_NOTE_TO_MMC;
           break;
         }
         case 'P': {
-          type = TT_CC_TO_CC_IF_VALUE_CHANGE;
+	  if (1 == program_change_prevention) {
+	    error("You can only turn on program change prevention once on"
+		  " line %d", line_number);
+	  }
+	  debug("Identified line as PROGRAM_CHANGE_PREVENTION (%c)", c);
+	  program_change_prevention = 1;
+	  continue;
           break;
         }
         default: {
@@ -439,8 +453,7 @@ static void translation_table_init(const char *filename,
 
           break;
         }
-        case TT_CC_TO_CC:
-        case TT_CC_TO_CC_IF_VALUE_CHANGE: {
+        case TT_CC_TO_CC: {
           /*
            * Make sure that there are no duplicates in the MIDI Contentious
            * Control translation table.
@@ -495,7 +508,7 @@ static void midi2midi(snd_seq_t *seq_handle,
      * Loop over all events. (While at the end)
      */
     do {
-      int send_midi = 0;
+      int send_midi = 1;
       /*
        * Get the event information.
        */
@@ -521,7 +534,6 @@ static void midi2midi(snd_seq_t *seq_handle,
                   note_table[ev->data.note.note].value);
 
             ev->data.note.note = note_table[ev->data.note.note].value;
-            send_midi = 1;
 
             break;
           }
@@ -532,6 +544,8 @@ static void midi2midi(snd_seq_t *seq_handle,
             jack_transport_send(jack_client,
                                 note_table[ev->data.note.note].value,
                                 ev->data.note.velocity);
+
+            send_midi = 0;
 
             break;
           }
@@ -549,12 +563,12 @@ static void midi2midi(snd_seq_t *seq_handle,
 
       }
       else if ((SND_SEQ_EVENT_CONTROLLER == ev->type) &&
-               (TT_NONE != cc_table[ev->data.control.param].type)) {
+	       (TT_NONE != cc_table[ev->data.control.param].type)) {
         /*
          * When midi2midi receives a MIDI Continuous Controller message and
          * the from-value (index) is set in the translation table for MIDI
          */
-        switch (note_table[ev->data.note.note].type) {
+        switch (note_table[ev->data.control.param].type) {
 
           case TT_CC_TO_CC: {
             /*
@@ -566,34 +580,6 @@ static void midi2midi(snd_seq_t *seq_handle,
                   cc_table[ev->data.control.param].value);
 
             ev->data.control.param = cc_table[ev->data.control.param].value;
-            send_midi = 1;
-
-            break;
-          }
-          case TT_CC_TO_CC_IF_VALUE_CHANGE: {
-            /*
-             * Only translate a MIDI Continuous Controller into another MIDI
-             * Continuous Controller value if the parameter value actually
-             * changed.
-             */
-            if (cc_table[ev->data.control.param].last_value !=
-                ev->data.control.value) {
-              /*
-               * The new value seem to be different than the last translated
-               * one so lets produce the translation.
-               */
-
-              debug("Translating MIDI CC %d to MIDI CC %d since value changed",
-                    ev->data.control.param,
-                    cc_table[ev->data.control.param].value);
-
-              ev->data.control.param = cc_table[ev->data.control.param].value;
-
-              cc_table[ev->data.control.param].last_value =
-                ev->data.control.value;
-
-              send_midi = 1;
-            }
 
             break;
           }
@@ -605,6 +591,37 @@ static void midi2midi(snd_seq_t *seq_handle,
             break;
           }
         }
+      }
+      else if ((SND_SEQ_EVENT_PGMCHANGE == ev->type) &&
+	       (1 == program_change_prevention)) {
+	/*
+	 * Only translate a MIDI Continuous Controller into another MIDI
+	 * Continuous Controller value if the parameter value actually
+	 * changed.
+	 */
+	if (cc_table[ev->data.control.param].last_value !=
+	    ev->data.control.value) {
+	  /*
+	   * The new value seem to be different than the last translated
+	   * one so lets produce the translation.
+	   */
+	  
+	  debug("Program changed to %d value changed",
+		ev->data.control.param,
+		cc_table[ev->data.control.param].value);
+
+	  ev->data.control.param = cc_table[ev->data.control.param].value;
+
+	  cc_table[ev->data.control.param].last_value =
+	    ev->data.control.value;
+
+	}
+	else {
+	  debug("Preventing program change to %d since value did not change",
+		ev->data.control.param);
+	  send_midi = 0;
+	}
+	
       }
 
       /*
