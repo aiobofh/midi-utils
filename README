@@ -75,6 +75,10 @@ Or you can override the ALSA port names and Jack Transport names with the
 
 midi2midi -c configfile.m2m -n RealName
 
+If you would like to just forward all MIDI events except some special ones:
+
+midi2midi -f NOTE_ON,NOTE_OFF -n NoteRemover
+
 
 Command line options
 -  -  -  -  -  -  -
@@ -83,10 +87,12 @@ Command line options
 -v, --version                Display version information.
 -c, --config=file            Note translation configuration file
                              to load. See manual for file format.
--n, --client_name=name       Name of the ALSA/Jack client. This
+-n, --client_name=name       Name of the client. This
                              overrides line 2 in the config file.
 -p, --program-repeat-prevent Prevent a program select on a MIDI
                              device to repeated times.
+-f, --filter-all-but <what>  Filter all MIDI messages except the
+                             specified message types.
 -d, --debug                  Output debug information.
 
 
