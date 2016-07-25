@@ -56,7 +56,6 @@ snd_seq_t *sequencer_new(int *in_port_ptr,
     mode = mode | SND_SEQ_OPEN_OUTPUT;
   }
 
-
   /*
    * Open an ALSA MIDI input and output ports.
    */
@@ -120,5 +119,3 @@ struct pollfd *sequencer_poller_new(snd_seq_t *seq_handle,
 void sequencer_poller_delete(struct pollfd *pfd) {
   free(pfd);
 }
-
-

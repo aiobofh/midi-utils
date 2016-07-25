@@ -27,6 +27,8 @@
  *
  */
 
+#ifdef USE_JACK
+
 #include <stdlib.h>
 #include <math.h>
 #include <jack/jack.h>
@@ -186,3 +188,5 @@ void jack_transport_delete(jack_client_t *jack_client) {
   jack_deactivate(jack_client);
   jack_client_close(jack_client);
 }
+
+#endif

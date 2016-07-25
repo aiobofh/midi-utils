@@ -39,15 +39,17 @@
 #include <signal.h>
 #include <unistd.h>
 #include <alsa/asoundlib.h>
+#ifdef USE_JACK
 #include <jack/jack.h>
 #include <jack/transport.h>
-
+#endif
 #include "error.h"
 #include "debug.h"
 #include "quit.h"
 #include "sequencer.h"
+#ifdef USE_JACK
 #include "jack_transport.h"
-
+#endif
 #define APPNAME "midi2midi"
 #define VERSION "1.1.0"
 
@@ -66,7 +68,9 @@ typedef enum {
   TT_NONE,
   TT_NOTE_TO_NOTE,
   TT_CC_TO_CC,
+#ifdef USE_JACK
   TT_NOTE_TO_JACK,
+#endif
   TT_NOTE_TO_MMC
 } translation_type;
 
@@ -79,9 +83,32 @@ typedef enum {
   CB_NONE = 0,
   CB_ALSA_MIDI_IN = 1,
   CB_ALSA_MIDI_OUT = 2,
+#ifdef USE_JACK
   CB_JACK_TRANSPORT_OUT = 4
+#endif
 } capability;
 
+/*
+ * Type definition for different message types to filter on.
+ */
+typedef enum {
+  MT_NONE = 0,
+  MT_NOTE_ON = 1,
+  MT_NOTE_OFF = 2,
+  MT_POLYPHONIC_KEY_PRESSURE = 4,
+  MT_CONTROL_CHANGE = 8,
+  MT_PROGRAM_CHANGE = 16,
+  MT_CHANNEL_PRESSURE = 32,
+  MT_PITCH_BEND_CHANGE = 64,
+  MT_CHANNEL_MODE_MESSAGES = 128,
+  MT_SYSEX = 128,
+  MT_MIDI_TIME_CODE_QUARTER_FRAME = 256,
+  MT_SONG_POSITION_POINTER = 512,
+  MT_SONG_SELECT = 1024,
+  MT_TUNE_REQUEST = 2048,
+  MT_TIMING_CLOCK = 4096,
+  MT_MMC = 8196
+} message_type;
 
 /*
  * Type definition for a translation table entry.
@@ -98,15 +125,20 @@ typedef struct {
  * Command usage providing a simple help for the user.
  */
 static void usage(char *app_name) {
-  printf("USAGE: %s [-c <file name>] [-n <client_name>] [-hvpd]\n\n"
+  printf("USAGE: %s [-c <file name>] [-n <client_name>] [-hvpd] [-f \n\n"
 	 " -h, --help                   Show this help text.\n"
 	 " -v, --version                Display version information.\n"
 	 " -c, --config=file            Note translation configuration file\n"
          "                              to load. See manual for file format.\n"
-         " -n, --client_name=name       Name of the ALSA/Jack client. This\n"
+         " -n, --client-name=name       Name of the client. This\n"
          "                              overrides line 2 in the config file.\n"
          " -p, --program-repeat-prevent Prevent a program select on a MIDI\n"
          "                              device to repeated times.\n"
+         " -f, --filter-all-but <what>  Filter all MIDI messages except the\n"
+         "                              specified message types.\n"
+#ifdef USE_JACK
+         " -j, --jack                   Use Jack-specific fatures.\n"
+#endif
 	 " -d, --debug                  Output debug information.\n"
 	 "\n"
          "This tool is a useful MIDI proxy if you own studio equipment that\n"
@@ -132,11 +164,20 @@ static void quit_callback(int sig) {
  * Parse the specified configuration file and construct translation tables
  * for both MIDI notes and MIDI Continuous Controls.
  */
+#ifdef USE_JACK
+static capability translation_table_init(const char *filename,
+                                         translation note_table[255],
+                                         translation cc_table[255],
+                                         char *port_name,
+                                         capability capabilities,
+                                         int use_jack) {
+#else
 static capability translation_table_init(const char *filename,
                                          translation note_table[255],
                                          translation cc_table[255],
                                          char *port_name,
                                          capability capabilities) {
+#endif
   FILE *fd;
   int line_number = 0;
   int i;
@@ -266,12 +307,18 @@ static capability translation_table_init(const char *filename,
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
+#ifdef USE_JACK
         case 'J': {
 	  debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
+          if (1 == use_jack) {
+            fprintf(stderr, "ERROR: Jack features are not enabled. Use -j, --jack to enable them\n");
+            exit(EXIT_FAILURE);
+          }
           type = TT_NOTE_TO_JACK;
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_JACK_TRANSPORT_OUT);
           break;
         }
+#endif
         case 'M': {
 	  debug("Identified line as TT_NOTE_TO_MMC (%c)", c);
           type = TT_NOTE_TO_MMC;
@@ -292,7 +339,7 @@ static capability translation_table_init(const char *filename,
         error("Line %d of '%s' has an invalid from value (must be 0-255).",
               line_number, filename);
       }
-
+#ifdef USE_JACK
       if (TT_NOTE_TO_JACK != type) {
         /*
          * Perform some sanity checking on the to-value (since it can only be
@@ -328,13 +375,16 @@ static capability translation_table_init(const char *filename,
                 to);
         }
       }
+#endif
 
       /*
        * Insert the note transformation in the translation table.
        */
       switch (type) {
         case TT_NOTE_TO_NOTE:
+#ifdef USE_JACK
         case TT_NOTE_TO_JACK:
+#endif
         case TT_NOTE_TO_MMC: {
           /*
            * Make sure that there are no duplicates in the note translation
@@ -384,9 +434,13 @@ static capability translation_table_init(const char *filename,
   return capabilities;
 }
 
+#define FILTERMODE(NAME, ALSANAME)                                      \
+  filter |= ((0 != (filter_all_but & MT_ ## NAME)) && (SND_SEQ_EVENT_ ## ALSANAME == ev->type))
+
 /*
  * Main event loop.
  */
+#ifdef USE_JACK
 static void midi2midi(snd_seq_t *seq_handle,
                       jack_client_t *jack_client,
 		      struct pollfd *pfd,
@@ -395,7 +449,20 @@ static void midi2midi(snd_seq_t *seq_handle,
 		      int out_port,
 		      translation note_table[256],
                       translation cc_table[256],
-                      int program_change_prevention) {
+                      int program_change_prevention,
+                      message_type filter_all_but,
+                      int use_jack) {
+#else
+static void midi2midi(snd_seq_t *seq_handle,
+		      struct pollfd *pfd,
+		      int npfd,
+		      int in_port,
+		      int out_port,
+		      translation note_table[256],
+                      translation cc_table[256],
+                      int program_change_prevention,
+                      message_type filter_all_but) {
+#endif
   /*
    * Note parameters
    */
@@ -405,6 +472,7 @@ static void midi2midi(snd_seq_t *seq_handle,
    * For now an instance which can not handle ALSA MIDI input at all is not
    * supported.
    */
+
   if (NULL == seq_handle) {
     return;
   }
@@ -418,6 +486,7 @@ static void midi2midi(snd_seq_t *seq_handle,
      */
     do {
       int send_midi = 1;
+      int filter = 0;
       /*
        * Get the event information.
        */
@@ -425,12 +494,51 @@ static void midi2midi(snd_seq_t *seq_handle,
       snd_seq_ev_set_subs(ev);
       snd_seq_ev_set_direct(ev);
 
+      if (filter_all_but != MT_NONE) {
+        FILTERMODE(NOTE_ON, NOTEON);
+        FILTERMODE(NOTE_ON, NOTE);
+
+        FILTERMODE(NOTE_OFF, NOTEOFF);
+        FILTERMODE(NOTE_OFF, NOTE);
+
+        FILTERMODE(POLYPHONIC_KEY_PRESSURE, KEYPRESS);
+
+        FILTERMODE(CONTROL_CHANGE, CONTROLLER);
+
+        FILTERMODE(PROGRAM_CHANGE, PGMCHANGE);
+
+        FILTERMODE(CHANNEL_PRESSURE, CHANPRESS);
+
+        FILTERMODE(PITCH_BEND_CHANGE, PITCHBEND);
+
+        FILTERMODE(SYSEX, SYSEX);
+
+        FILTERMODE(MIDI_TIME_CODE_QUARTER_FRAME, QFRAME);
+
+        FILTERMODE(SONG_POSITION_POINTER, SONGPOS);
+
+        FILTERMODE(SONG_SELECT, SONGSEL);
+
+        FILTERMODE(TUNE_REQUEST, TUNE_REQUEST);
+
+        FILTERMODE(TIMING_CLOCK, CLOCK);
+        FILTERMODE(TIMING_CLOCK, TICK);
+
+        FILTERMODE(MMC, START);
+        FILTERMODE(MMC, STOP);
+        FILTERMODE(MMC, CONTINUE);
+      }
+
       /*
        * Translate either a note or a CC command.
        */
-      if (((SND_SEQ_EVENT_NOTEON == ev->type) ||
-           (SND_SEQ_EVENT_NOTEOFF == ev->type)) &&
-          (TT_NONE != note_table[ev->data.note.note].type)) {
+      if (0 != filter) {
+        debug("Filtering event %d\n", ev->type);
+        send_midi = 0;
+      }
+      else if (((SND_SEQ_EVENT_NOTEON == ev->type) ||
+                (SND_SEQ_EVENT_NOTEOFF == ev->type)) &&
+               (TT_NONE != note_table[ev->data.note.note].type)) {
 
         switch (note_table[ev->data.note.note].type) {
 
@@ -446,7 +554,12 @@ static void midi2midi(snd_seq_t *seq_handle,
 
             break;
           }
+#ifdef USE_JACK
           case TT_NOTE_TO_JACK: {
+            if (0 == use_jack) {
+              send_midi = 0;
+              break;
+            }
             /*
              * Send a jack transport command.
              */
@@ -458,6 +571,7 @@ static void midi2midi(snd_seq_t *seq_handle,
 
             break;
           }
+#endif
           default: {
             /*
              * Some note-translation that is not supported should
@@ -553,6 +667,47 @@ static void midi2midi(snd_seq_t *seq_handle,
   }
 }
 
+#define MODE_CONV(NAME)                                  \
+  strcmpret = strcmp(#NAME, &optarg[lastpos]);     \
+  if (0 == strcmpret) {                                  \
+    retval |= MT_##NAME;                                 \
+    lastpos = i + 1;                                     \
+    printf(#NAME "\n");                                  \
+    continue;                                            \
+  }
+
+message_type lookup_capabilities(char* optarg) {
+  message_type retval = MT_NONE;
+  size_t i;
+  int lastpos = 0;
+  size_t len = strlen(optarg);
+  int strcmpret = 0;
+  for (i = 0; i < len; i++) {
+    if ((',' == optarg[i]) || (i == (len - 1))) {
+      if (optarg[i] == ',') {
+        optarg[i] = 0;
+      }
+      MODE_CONV(NOTE_ON);
+      MODE_CONV(NOTE_OFF);
+      MODE_CONV(POLYPHONIC_KEY_PRESSURE);
+      MODE_CONV(CONTROL_CHANGE);
+      MODE_CONV(PROGRAM_CHANGE);
+      MODE_CONV(CHANNEL_PRESSURE);
+      MODE_CONV(PITCH_BEND_CHANGE);
+      MODE_CONV(CHANNEL_MODE_MESSAGES);
+      MODE_CONV(SYSEX);
+      MODE_CONV(MIDI_TIME_CODE_QUARTER_FRAME);
+      MODE_CONV(SONG_POSITION_POINTER);
+      MODE_CONV(SONG_SELECT);
+      MODE_CONV(TUNE_REQUEST);
+      MODE_CONV(TIMING_CLOCK);
+      MODE_CONV(MMC);
+      fprintf(stderr, "ERROR: Unknown message type\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+  return retval;
+}
 
 /*
  * Main function of midi2midi.
@@ -563,6 +718,11 @@ int main(int argc, char *argv[]) {
   char port_name[255];
   char *config_file = NULL;
   int program_change_prevention = 0;
+  message_type filter_all_but = MT_NONE;
+
+#ifdef USE_JACK
+  int use_jack = 0;
+#endif
 
   /*
    * This variable holds a bit pattern describing what resources need to be
@@ -582,8 +742,9 @@ int main(int argc, char *argv[]) {
   /*
    * Handles for Jack client stuff.
    */
+#ifdef USE_JACK
   jack_client_t *jack_client = NULL;
-
+#endif
   /*
    * This is where the note translation-table is stored.
    */
@@ -596,11 +757,16 @@ int main(int argc, char *argv[]) {
    * Command line options variables.
    */
   static struct option long_options[] = {
-    {"debug", no_argument, NULL,  'd'},
-    {"config", required_argument, NULL,  'c'},
-    {"name", required_argument, NULL, 'n'},
     {"help", no_argument, NULL, 'h'},
     {"version", no_argument, NULL, 'v'},
+    {"config", required_argument, NULL,  'c'},
+    {"client-name", required_argument, NULL, 'n'},
+    {"program-repeat-prevent", no_argument, NULL, 'p'},
+    {"filter-all-but", required_argument, NULL, 'f'},
+#ifdef USE_JACK
+    {"jack", no_argument, NULL, 'j'},
+#endif
+    {"debug", no_argument, NULL,  'd'},
     {0, 0, 0,  0 }
   };
 
@@ -612,15 +778,22 @@ int main(int argc, char *argv[]) {
   while(1) {
     int option_index = 0;
     int c;
-    c = getopt_long(argc, argv, "dn:c:hpv?",
+    c = getopt_long(argc, argv, "dn:c:hpv?f:j",
 		    long_options, &option_index);
     if (c == -1) {
       break;
     }
 
     switch (c) {
-      case 'd': {
-        debug_enable();
+      case '?':
+      case 'h': {
+        usage(argv[0]);
+        exit(EXIT_SUCCESS);
+        break;
+      }
+      case 'v': {
+        printf("%s %s", app_name, VERSION);
+        exit(EXIT_SUCCESS);
         break;
       }
       case 'c': {
@@ -636,19 +809,26 @@ int main(int argc, char *argv[]) {
         capabilities = CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT;
         break;
       }
+      case 'f': {
+        if (optarg[0] == '-') {
+          fprintf(stderr, "ERROR: Message type required for -f, --filter-all-but\n");
+          exit(EXIT_FAILURE);
+        }
+        filter_all_but = lookup_capabilities(optarg);
+        break;
+      }
       case 'n': {
         strncpy(port_name, optarg, 254);
         break;
       }
-      case 'v': {
-        printf("%s %s", app_name, VERSION);
-        exit(EXIT_SUCCESS);
+#ifdef USE_JACK
+      case 'j': {
+        use_jack = 1;
         break;
       }
-      case '?':
-      case 'h': {
-        usage(argv[0]);
-        exit(EXIT_SUCCESS);
+#endif
+      case 'd': {
+        debug_enable();
         break;
       }
       default: {
@@ -670,11 +850,25 @@ int main(int argc, char *argv[]) {
   /*
    * Read the configuration file and get all the essential information.
    */
+#ifdef USE_JACK
+  capabilities = translation_table_init(config_file,
+                                        note_table,
+                                        cc_table,
+                                        port_name,
+                                        capabilities,
+                                        use_jack);
+#else
   capabilities = translation_table_init(config_file,
                                         note_table,
                                         cc_table,
                                         port_name,
                                         capabilities);
+#endif
+
+  if (MT_NONE != filter_all_but) {
+    capabilities |= CB_ALSA_MIDI_IN;
+    capabilities |= CB_ALSA_MIDI_OUT;
+  }
 
   /*
    * Set-up ALSA MIDI and Jack Transport depending on how the program
@@ -690,9 +884,13 @@ int main(int argc, char *argv[]) {
     seq_handle = sequencer_new(in_port_ptr, out_port_ptr, port_name);
     pfd = sequencer_poller_new(seq_handle, &npfd);
   }
-  if (CB_JACK_TRANSPORT_OUT == (capabilities & CB_JACK_TRANSPORT_OUT)) {
-    jack_client = jack_transport_new(port_name);
+#ifdef USE_JACK
+  if (1 == use_jack) {
+    if (CB_JACK_TRANSPORT_OUT == (capabilities & CB_JACK_TRANSPORT_OUT)) {
+      jack_client = jack_transport_new(port_name);
+    }
   }
+#endif
 
   /*
    * Ensure a clean exit in as many situations as possible.
@@ -703,6 +901,7 @@ int main(int argc, char *argv[]) {
    * Main loop.
    */
   while (!quit) {
+#ifdef USE_JACK
     midi2midi(seq_handle,
               jack_client,
               pfd,
@@ -711,7 +910,20 @@ int main(int argc, char *argv[]) {
               out_port,
               note_table,
               cc_table,
-              program_change_prevention);
+              program_change_prevention,
+              filter_all_but,
+              use_jack);
+#else
+    midi2midi(seq_handle,
+              pfd,
+              npfd,
+              in_port,
+              out_port,
+              note_table,
+              cc_table,
+              program_change_prevention,
+              filter_all_but);
+#endif
   }
 
   /*
@@ -721,9 +933,13 @@ int main(int argc, char *argv[]) {
     sequencer_poller_delete(pfd);
     sequencer_delete(seq_handle);
   }
-  if (NULL != jack_client) {
-    jack_transport_delete(jack_client);
+#ifdef USE_JACK
+  if (use_jack) {
+    if (NULL != jack_client) {
+      jack_transport_delete(jack_client);
+    }
   }
+#endif
 
   /*
    * Make a clean exit.

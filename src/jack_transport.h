@@ -30,6 +30,8 @@
 #ifndef _JACK_TRANSPORT_H_
 #define _JACK_TRANSPORT_H_
 
+#ifdef USE_JACK
+
 #include <jack/jack.h>
 
 typedef enum {
@@ -60,5 +62,7 @@ void jack_transport_send(jack_client_t *jack_client,
  * Clean up a jack client.
  */
 void jack_transport_delete(jack_client_t *jack_client);
+
+#endif
 
 #endif /* _JACK_TRANSPORT_H_ */
