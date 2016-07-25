@@ -134,8 +134,7 @@ static void usage(char *app_name) {
          "                              overrides line 2 in the config file.\n"
          " -p, --program-repeat-prevent Prevent a program select on a MIDI\n"
          "                              device to repeated times.\n"
-         " -f, --filter-all-but <what>  Filter all MIDI messages except the\n"
-         "                              specified message types.\n"
+         " -f, --filter         <what>  Filter all specified MIDI message types.\n"
 #ifdef USE_JACK
          " -j, --jack                   Use Jack-specific fatures.\n"
 #endif
@@ -435,7 +434,7 @@ static capability translation_table_init(const char *filename,
 }
 
 #define FILTERMODE(NAME, ALSANAME)                                      \
-  filter |= ((0 != (filter_all_but & MT_ ## NAME)) && (SND_SEQ_EVENT_ ## ALSANAME == ev->type))
+  filter |= ((0 != (filter & MT_ ## NAME)) && (SND_SEQ_EVENT_ ## ALSANAME == ev->type))
 
 /*
  * Main event loop.
@@ -450,7 +449,7 @@ static void midi2midi(snd_seq_t *seq_handle,
 		      translation note_table[256],
                       translation cc_table[256],
                       int program_change_prevention,
-                      message_type filter_all_but,
+                      message_type filter,
                       int use_jack) {
 #else
 static void midi2midi(snd_seq_t *seq_handle,
@@ -461,7 +460,7 @@ static void midi2midi(snd_seq_t *seq_handle,
 		      translation note_table[256],
                       translation cc_table[256],
                       int program_change_prevention,
-                      message_type filter_all_but) {
+                      message_type filter) {
 #endif
   /*
    * Note parameters
@@ -494,7 +493,7 @@ static void midi2midi(snd_seq_t *seq_handle,
       snd_seq_ev_set_subs(ev);
       snd_seq_ev_set_direct(ev);
 
-      if (filter_all_but != MT_NONE) {
+      if (filter != MT_NONE) {
         FILTERMODE(NOTE_ON, NOTEON);
         FILTERMODE(NOTE_ON, NOTE);
 
@@ -718,7 +717,7 @@ int main(int argc, char *argv[]) {
   char port_name[255];
   char *config_file = NULL;
   int program_change_prevention = 0;
-  message_type filter_all_but = MT_NONE;
+  message_type filter = MT_NONE;
 
 #ifdef USE_JACK
   int use_jack = 0;
@@ -814,7 +813,7 @@ int main(int argc, char *argv[]) {
           fprintf(stderr, "ERROR: Message type required for -f, --filter-all-but\n");
           exit(EXIT_FAILURE);
         }
-        filter_all_but = lookup_capabilities(optarg);
+        filter = lookup_capabilities(optarg);
         break;
       }
       case 'n': {
@@ -865,7 +864,7 @@ int main(int argc, char *argv[]) {
                                         capabilities);
 #endif
 
-  if (MT_NONE != filter_all_but) {
+  if (MT_NONE != filter) {
     capabilities |= CB_ALSA_MIDI_IN;
     capabilities |= CB_ALSA_MIDI_OUT;
   }
@@ -911,7 +910,7 @@ int main(int argc, char *argv[]) {
               note_table,
               cc_table,
               program_change_prevention,
-              filter_all_but,
+              filter,
               use_jack);
 #else
     midi2midi(seq_handle,
@@ -922,7 +921,7 @@ int main(int argc, char *argv[]) {
               note_table,
               cc_table,
               program_change_prevention,
-              filter_all_but);
+              filter);
 #endif
   }
 

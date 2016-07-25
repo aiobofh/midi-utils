@@ -108,8 +108,7 @@ Command line options
                              overrides line 2 in the config file.
 -p, --program-repeat-prevent Prevent a program select on a MIDI
                              device to repeated times.
--f, --filter-all-but <what>  Filter all MIDI messages except the
-                             specified message types.
+-f, --filter <what>          Filter all specified MIDI messag types.
 -d, --debug                  Output debug information.
 
 
