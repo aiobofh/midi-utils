@@ -79,6 +79,23 @@ If you would like to just forward all MIDI events except some special ones:
 
 midi2midi -f NOTE_ON,NOTE_OFF -n NoteRemover
 
+Valid filter options are:
+
+  NOTE_ON
+  NOTE_OFF
+  POLYPHONIC_KEY_PRESSURE
+  CONTROL_CHANGE
+  PROGRAM_CHANGE
+  CHANNEL_PRESSURE
+  PITCH_BEND_CHANGE
+  CHANNEL_MODE_MESSAGES
+  SYSEX
+  MIDI_TIME_CODE_QUARTER_FRAME
+  SONG_POSITION_POINTER
+  SONG_SELECT
+  TUNE_REQUEST
+  TIMING_CLOCK
+  MMC
 
 Command line options
 -  -  -  -  -  -  -
