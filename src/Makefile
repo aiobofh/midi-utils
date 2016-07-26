@@ -33,6 +33,7 @@ CFLAGS=-pedantic -Wall -std=c99 -g -lm
 SRCS=quit.c error.c debug.c sequencer.c midi2midi.c
 ifneq (${USE_JACK},)
   SRCS+=jack_transport.c
+  JACKFLAGS+=-DUSE_JACK=1
 endif
 OBJS=$(SRCS:.c=.o)
 
