@@ -24,11 +24,16 @@
 # Makefile for src-folder for midi-utils.
 #
 
-JACKFLAGS:=`pkg-config --cflags --libs jack`
+ifneq (${USE_JACK},)
+  JACKFLAGS:=`pkg-config --cflags --libs jack`
+endif
 ALSAFLAGS:=`pkg-config --cflags --libs alsa`
 CFLAGS=-pedantic -Wall -std=c99 -g -lm
 
-SRCS=quit.c error.c debug.c sequencer.c jack_transport.c midi2midi.c
+SRCS=quit.c error.c debug.c sequencer.c midi2midi.c
+ifneq (${USE_JACK},)
+  SRCS=${SRCS} jack_transport.c
+endif
 OBJS=$(SRCS:.c=.o)
 
 all: .depend midi2midi
