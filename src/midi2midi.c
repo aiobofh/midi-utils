@@ -117,6 +117,7 @@ typedef struct {
   translation_type type;
   char value;
   char last_value;
+  char channel;
   int line;
 } translation;
 
@@ -126,9 +127,9 @@ typedef struct {
  */
 static void usage(char *app_name) {
   printf("USAGE: %s [-c <file name>] [-n <client_name>] [-hvpd] [-f \n\n"
-	 " -h, --help                   Show this help text.\n"
-	 " -v, --version                Display version information.\n"
-	 " -c, --config=file            Note translation configuration file\n"
+         " -h, --help                   Show this help text.\n"
+         " -v, --version                Display version information.\n"
+         " -c, --config=file            Note translation configuration file\n"
          "                              to load. See manual for file format.\n"
          " -n, --client-name=name       Name of the client. This\n"
          "                              overrides line 2 in the config file.\n"
@@ -138,13 +139,13 @@ static void usage(char *app_name) {
 #ifdef USE_JACK
          " -j, --jack                   Use Jack-specific fatures.\n"
 #endif
-	 " -d, --debug                  Output debug information.\n"
-	 "\n"
+         " -d, --debug                  Output debug information.\n"
+         "\n"
          "This tool is a useful MIDI proxy if you own studio equipment that\n"
          "will not speak to each other the way you want to. Just route your\n"
          "MIDI signals through an instance of this and make magic happen!\n"
          "\n"
-	 "Author: AiO\n", app_name);
+         "Author: AiO\n", app_name);
 }
 
 
@@ -189,6 +190,7 @@ static capability translation_table_init(const char *filename,
     cc_table[i].type = note_table[i].type = TT_NONE;
     cc_table[i].value = note_table[i].value = i;
     cc_table[i].last_value = -1;
+    cc_table[i].channel = -1;
   }
 
   if (NULL == filename) {
@@ -208,9 +210,8 @@ static capability translation_table_init(const char *filename,
    * Read each line of the configuration file and assign notes accordingly.
    */
   while (!feof(fd)) {
-    int from, to;
+    int from, to, channel;
     char c;
-    translation_type type;
     errno = 0;
     line_number++;
 
@@ -223,24 +224,34 @@ static capability translation_table_init(const char *filename,
       /*
        * Make sure that we can handle the file version :)
        */
-      fscanf(fd, "midi2midi-config-1.1\n");
-
+      fscanf(fd, "midi2midi-config-1.2\n");
       if (errno != 0) {
-        debug("The file '%s' was no 1.1 file, trying 1.0", filename);
+        debug("The file '%s' was no 1.2 file, trying 1.1", filename);
 
         /*
          * Just to be sure, start over.
          */
         rewind(fd);
 
-        /*
-         * We can also handle 1.0 configuration files.
-         */
-        fscanf(fd, "midi2midi-config-1.0\n");
+        fscanf(fd, "midi2midi-config-1.1\n");
 
         if (errno != 0) {
-          error("The file '%s' is not a midi2midi configuration file.",
-                filename);
+          debug("The file '%s' was no 1.1 file, trying 1.0", filename);
+
+          /*
+           * Just to be sure, start over.
+           */
+          rewind(fd);
+
+          /*
+           * We can also handle 1.0 configuration files.
+           */
+          fscanf(fd, "midi2midi-config-1.0\n");
+
+          if (errno != 0) {
+            error("The file '%s' is not a midi2midi configuration file.",
+                  filename);
+          }
         }
       }
       continue;
@@ -278,16 +289,31 @@ static capability translation_table_init(const char *filename,
       continue;
     }
     else {
+      int use_channel = 0;
+      translation_type type = TT_NONE;
       /*
        * Read each line of the configuration file and insert translations into
        * the table.
        */
-      fscanf(fd, "%d%c%d\n", &from, &c, &to);
+      if (4 != fscanf(fd, "%3d%1c%3d,%3d\n", &from, &c, &to, &channel)) {
+        fscanf(fd, "%3d%1c%3d\n", &from, &c, &to);
+      }
+      else {
+        use_channel = 1;
+        if ((16 < channel) || (0 > channel)) {
+          error("Channel number must be between 1 and 16, not %d", channel);
+        }
+      }
 
-      debug("Reading line %d '%d%c%d'", line_number, from, c, to);
+      if (use_channel == 0) {
+        debug("Reading line %d '%d%c%d'", line_number, from, c, to);
+      }
+      else {
+        debug("Reading line %d '%d%c%d,%d'", line_number, from, c, to, channel);
+      }
 
       if (0 != errno) {
-	error("Error reading file '%s'.", filename);
+        error("Error reading file '%s'.", filename);
       }
 
       /*
@@ -296,21 +322,21 @@ static capability translation_table_init(const char *filename,
       switch (c) {
         case '>': {
           type = TT_CC_TO_CC;
-	  debug("Identified line as TT_CC_TO_CC (%c)", c);
+          debug("Identified line as TT_CC_TO_CC (%c)", c);
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
         case ':': {
           type = TT_NOTE_TO_NOTE;
-	  debug("Identified line as TT_NOTE_TO_NOTE (%c)", c);
+          debug("Identified line as TT_NOTE_TO_NOTE (%c)", c);
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
 #ifdef USE_JACK
         case 'J': {
-	  debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
+          debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
           if (1 == use_jack) {
-            fprintf(stderr, "ERROR: Jack features are not enabled. Use -j, --jack to enable them\n");
+            error("Jack features are not enabled. Use -j, --jack to enable them\n");
             exit(EXIT_FAILURE);
           }
           type = TT_NOTE_TO_JACK;
@@ -319,7 +345,7 @@ static capability translation_table_init(const char *filename,
         }
 #endif
         case 'M': {
-	  debug("Identified line as TT_NOTE_TO_MMC (%c)", c);
+          debug("Identified line as TT_NOTE_TO_MMC (%c)", c);
           type = TT_NOTE_TO_MMC;
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
@@ -413,6 +439,9 @@ static capability translation_table_init(const char *filename,
           }
           cc_table[from].type = type;
           cc_table[from].value = to;
+          if (use_channel) {
+            cc_table[from].channel = channel;
+          }
 
           break;
         }
@@ -442,22 +471,22 @@ static capability translation_table_init(const char *filename,
 #ifdef USE_JACK
 static void midi2midi(snd_seq_t *seq_handle,
                       jack_client_t *jack_client,
-		      struct pollfd *pfd,
-		      int npfd,
-		      int in_port,
-		      int out_port,
-		      translation note_table[256],
+                      struct pollfd *pfd,
+                      int npfd,
+                      int in_port,
+                      int out_port,
+                      translation note_table[256],
                       translation cc_table[256],
                       int program_change_prevention,
                       message_type filter,
                       int use_jack) {
 #else
 static void midi2midi(snd_seq_t *seq_handle,
-		      struct pollfd *pfd,
-		      int npfd,
-		      int in_port,
-		      int out_port,
-		      translation note_table[256],
+                      struct pollfd *pfd,
+                      int npfd,
+                      int in_port,
+                      int out_port,
+                      translation note_table[256],
                       translation cc_table[256],
                       int program_change_prevention,
                       message_type filter) {
@@ -545,10 +574,18 @@ static void midi2midi(snd_seq_t *seq_handle,
             /*
              * Prepare to just forward a translated note.
              */
-            debug("Translating note %d to note %d",
-                  ev->data.note.note,
-                  note_table[ev->data.note.note].value);
-
+            if (note_table[ev->data.note.note].channel > 0) {
+              debug("Translating note %d to note %d on channel %d",
+                    ev->data.note.note,
+                    note_table[ev->data.note.note].value,
+                    note_table[ev->data.note.note].channel);
+              ev->data.note.channel = note_table[ev->data.note.note].channel;
+            }
+            else {
+              debug("Translating note %d to note %d",
+                    ev->data.note.note,
+                    note_table[ev->data.note.note].value);
+            }
             ev->data.note.note = note_table[ev->data.note.note].value;
 
             break;
@@ -585,7 +622,7 @@ static void midi2midi(snd_seq_t *seq_handle,
 
       }
       else if ((SND_SEQ_EVENT_CONTROLLER == ev->type) &&
-	       (TT_NONE != cc_table[ev->data.control.param].type)) {
+               (TT_NONE != cc_table[ev->data.control.param].type)) {
         /*
          * When midi2midi receives a MIDI Continuous Controller message and
          * the from-value (index) is set in the translation table for MIDI
@@ -597,10 +634,18 @@ static void midi2midi(snd_seq_t *seq_handle,
              * Prepare to translate a MIDI Continuous Controller into another
              * MIDI Continuous Controller according to the configuration file.
              */
-            debug("Translating MIDI CC %d to MIDI CC %d",
-                  ev->data.control.param,
-                  cc_table[ev->data.control.param].value);
-
+            if (cc_table[ev->data.control.param].channel > 0) {
+              debug("Translating MIDI CC %d to MIDI CC %d on channel %d",
+                    ev->data.control.param,
+                    cc_table[ev->data.control.param].value,
+                    cc_table[ev->data.control.param].channel);
+              ev->data.control.channel = cc_table[ev->data.control.param].channel;
+            }
+            else {
+              debug("Translating MIDI CC %d to MIDI CC %d",
+                    ev->data.control.param,
+                    cc_table[ev->data.control.param].value);
+            }
             ev->data.control.param = cc_table[ev->data.control.param].value;
 
             break;
@@ -615,34 +660,34 @@ static void midi2midi(snd_seq_t *seq_handle,
         }
       }
       else if ((SND_SEQ_EVENT_PGMCHANGE == ev->type) &&
-	       (1 == program_change_prevention)) {
-	/*
-	 * Only translate a MIDI Continuous Controller into another MIDI
-	 * Continuous Controller value if the parameter value actually
-	 * changed.
-	 */
-	if (cc_table[ev->data.control.param].last_value !=
-	    ev->data.control.value) {
-	  /*
-	   * The new value seem to be different than the last translated
-	   * one so lets produce the translation.
-	   */
+               (1 == program_change_prevention)) {
+        /*
+         * Only translate a MIDI Continuous Controller into another MIDI
+         * Continuous Controller value if the parameter value actually
+         * changed.
+         */
+        if (cc_table[ev->data.control.param].last_value !=
+            ev->data.control.value) {
+          /*
+           * The new value seem to be different than the last translated
+           * one so lets produce the translation.
+           */
 
-	  debug("Program changed to %d value changed",
-		ev->data.control.param,
-		cc_table[ev->data.control.param].value);
+          debug("Program changed to %d value changed",
+                ev->data.control.param,
+                cc_table[ev->data.control.param].value);
 
-	  ev->data.control.param = cc_table[ev->data.control.param].value;
+          ev->data.control.param = cc_table[ev->data.control.param].value;
 
-	  cc_table[ev->data.control.param].last_value =
-	    ev->data.control.value;
+          cc_table[ev->data.control.param].last_value =
+          ev->data.control.value;
 
-	}
-	else {
-	  debug("Preventing program change to %d since value did not change",
-		ev->data.control.param);
-	  send_midi = 0;
-	}
+        }
+        else {
+          debug("Preventing program change to %d since value did not change",
+                ev->data.control.param);
+          send_midi = 0;
+        }
 
       }
 
@@ -701,7 +746,7 @@ message_type lookup_capabilities(char* optarg) {
       MODE_CONV(TUNE_REQUEST);
       MODE_CONV(TIMING_CLOCK);
       MODE_CONV(MMC);
-      fprintf(stderr, "ERROR: Unknown message type\n");
+      error("Unknown message type.%c", '\n');
       exit(EXIT_FAILURE);
     }
   }
@@ -778,7 +823,7 @@ int main(int argc, char *argv[]) {
     int option_index = 0;
     int c;
     c = getopt_long(argc, argv, "dn:c:hpv?f:j",
-		    long_options, &option_index);
+                    long_options, &option_index);
     if (c == -1) {
       break;
     }
@@ -810,7 +855,7 @@ int main(int argc, char *argv[]) {
       }
       case 'f': {
         if (optarg[0] == '-') {
-          fprintf(stderr, "ERROR: Message type required for -f, --filter-all-but\n");
+          error("Message type required for -f, --filter%c", '\n');
           exit(EXIT_FAILURE);
         }
         filter = lookup_capabilities(optarg);
