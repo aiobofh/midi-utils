@@ -51,7 +51,7 @@
 #include "jack_transport.h"
 #endif
 #define APPNAME "midi2midi"
-#define VERSION "1.1.0"
+#define VERSION "1.3.0"
 
 
 /*
@@ -68,6 +68,7 @@ typedef enum {
   TT_NONE,
   TT_NOTE_TO_NOTE,
   TT_CC_TO_CC,
+  TT_NOTE_TO_CC,
 #ifdef USE_JACK
   TT_NOTE_TO_JACK,
 #endif
@@ -224,33 +225,41 @@ static capability translation_table_init(const char *filename,
       /*
        * Make sure that we can handle the file version :)
        */
-      fscanf(fd, "midi2midi-config-1.2\n");
+      fscanf(fd, "midi2midi-config-1.3\n");
       if (errno != 0) {
-        debug("The file '%s' was no 1.2 file, trying 1.1", filename);
+        debug("The file '%s' was no 1.3 file, trying 1.2", filename);
 
         /*
          * Just to be sure, start over.
          */
-        rewind(fd);
-
-        fscanf(fd, "midi2midi-config-1.1\n");
-
+        fscanf(fd, "midi2midi-config-1.2\n");
         if (errno != 0) {
-          debug("The file '%s' was no 1.1 file, trying 1.0", filename);
+          debug("The file '%s' was no 1.2 file, trying 1.1", filename);
 
           /*
            * Just to be sure, start over.
            */
           rewind(fd);
 
-          /*
-           * We can also handle 1.0 configuration files.
-           */
-          fscanf(fd, "midi2midi-config-1.0\n");
+          fscanf(fd, "midi2midi-config-1.1\n");
 
           if (errno != 0) {
-            error("The file '%s' is not a midi2midi configuration file.",
-                  filename);
+            debug("The file '%s' was no 1.1 file, trying 1.0", filename);
+
+            /*
+             * Just to be sure, start over.
+             */
+            rewind(fd);
+
+            /*
+             * We can also handle 1.0 configuration files.
+             */
+            fscanf(fd, "midi2midi-config-1.0\n");
+
+            if (errno != 0) {
+              error("The file '%s' is not a midi2midi configuration file.",
+                    filename);
+            }
           }
         }
       }
@@ -332,6 +341,12 @@ static capability translation_table_init(const char *filename,
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
+        case '!': {
+          type = TT_NOTE_TO_CC;
+          debug("Identified line as TT_NOTE_TO_CC (%c)", c);
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
+          break;
+        }
 #ifdef USE_JACK
         case 'J': {
           debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
@@ -407,6 +422,7 @@ static capability translation_table_init(const char *filename,
        */
       switch (type) {
         case TT_NOTE_TO_NOTE:
+        case TT_NOTE_TO_CC:
 #ifdef USE_JACK
         case TT_NOTE_TO_JACK:
 #endif
@@ -587,6 +603,29 @@ static void midi2midi(snd_seq_t *seq_handle,
                     note_table[ev->data.note.note].value);
             }
             ev->data.note.note = note_table[ev->data.note.note].value;
+
+            break;
+          }
+          case TT_NOTE_TO_CC: {
+            /*
+             * Prepare to map not to a parameter id and velocity to the value.
+             */
+            if (note_table[ev->data.note.note].channel > 0) {
+              debug("Translating note %d to note %d on channel %d",
+                    ev->data.note.note,
+                    note_table[ev->data.note.note].value,
+                    note_table[ev->data.note.note].channel);
+              ev->data.note.channel = note_table[ev->data.note.note].channel;
+            }
+            else {
+              debug("Translating note %d to note %d",
+                    ev->data.note.note,
+                    note_table[ev->data.note.note].value);
+            }
+            ev->data.note.note = note_table[ev->data.note.note].value;
+            ev->type = SND_SEQ_EVENT_CONTROLLER;
+            ev->data.control.param = note_table[ev->data.note.note].value;
+            ev->data.control.value = ev->data.note.velocity;
 
             break;
           }
