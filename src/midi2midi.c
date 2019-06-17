@@ -190,8 +190,8 @@ static capability translation_table_init(const char *filename,
   for (i = 0; i < 255; i++) {
     cc_table[i].type = note_table[i].type = TT_NONE;
     cc_table[i].value = note_table[i].value = i;
-    cc_table[i].last_value = -1;
-    cc_table[i].channel = -1;
+    cc_table[i].last_value = note_table[i].last_value = -1;
+    cc_table[i].channel = note_table[i].channel = -1;
   }
 
   if (NULL == filename) {
@@ -216,7 +216,7 @@ static capability translation_table_init(const char *filename,
     errno = 0;
     line_number++;
 
-    /*
+     /*
      * Parse the current line. First line is the file version, the second
      * line is the name of the MIDI-port to use and the rest is the actual
      * MIDI note conversion table definition.
@@ -226,6 +226,7 @@ static capability translation_table_init(const char *filename,
        * Make sure that we can handle the file version :)
        */
       fscanf(fd, "midi2midi-config-1.3\n");
+
       if (errno != 0) {
         debug("The file '%s' was no 1.3 file, trying 1.2", filename);
 
@@ -378,6 +379,7 @@ static capability translation_table_init(const char *filename,
       if ((0 > from) || (255 < from)) {
         error("Line %d of '%s' has an invalid from value (must be 0-255).",
               line_number, filename);
+
       }
 #ifdef USE_JACK
       if (TT_NOTE_TO_JACK != type) {
@@ -590,7 +592,8 @@ static void midi2midi(snd_seq_t *seq_handle,
             /*
              * Prepare to just forward a translated note.
              */
-            if (note_table[ev->data.note.note].channel > 0) {
+            if (note_table[ev->data.note.note].channel > 0 && 
+                note_table[ev->data.note.note].channel < 17) {
               debug("Translating note %d to note %d on channel %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
@@ -610,7 +613,8 @@ static void midi2midi(snd_seq_t *seq_handle,
             /*
              * Prepare to map not to a parameter id and velocity to the value.
              */
-            if (note_table[ev->data.note.note].channel > 0) {
+            if (note_table[ev->data.note.note].channel > 0 &&
+                note_table[ev->data.note.note].channel < 17) {
               debug("Translating note %d to note %d on channel %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
@@ -673,7 +677,8 @@ static void midi2midi(snd_seq_t *seq_handle,
              * Prepare to translate a MIDI Continuous Controller into another
              * MIDI Continuous Controller according to the configuration file.
              */
-            if (cc_table[ev->data.control.param].channel > 0) {
+            if (cc_table[ev->data.control.param].channel > 0 && 
+                cc_table[ev->data.control.param].channel < 17) {
               debug("Translating MIDI CC %d to MIDI CC %d on channel %d",
                     ev->data.control.param,
                     cc_table[ev->data.control.param].value,
@@ -1035,3 +1040,4 @@ int main(int argc, char *argv[]) {
    */
   return 0;
 }
+
