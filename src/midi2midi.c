@@ -310,7 +310,7 @@ static capability translation_table_init(const char *filename,
       }
       else {
         use_channel = 1;
-        if ((16 < channel) || (0 > channel)) {
+        if ((17 < channel) || (0 > channel)) {
           error("Channel number must be between 1 and 16, not %d", channel);
         }
       }
@@ -441,7 +441,9 @@ static capability translation_table_init(const char *filename,
           }
           note_table[from].type = type;
           note_table[from].value = to;
-
+          if (use_channel) {
+            note_table[from].channel = channel;
+          }
           break;
         }
         case TT_CC_TO_CC: {
@@ -592,8 +594,7 @@ static void midi2midi(snd_seq_t *seq_handle,
             /*
              * Prepare to just forward a translated note.
              */
-            if (note_table[ev->data.note.note].channel > 0 && 
-                note_table[ev->data.note.note].channel < 17) {
+            if (note_table[ev->data.note.note].channel > 0) {
               debug("Translating note %d to note %d on channel %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
@@ -613,23 +614,24 @@ static void midi2midi(snd_seq_t *seq_handle,
             /*
              * Prepare to map not to a parameter id and velocity to the value.
              */
-            if (note_table[ev->data.note.note].channel > 0 &&
-                note_table[ev->data.note.note].channel < 17) {
-              debug("Translating note %d to note %d on channel %d",
+            if (note_table[ev->data.note.note].channel > 0) {
+              debug("Translating note %d to CC %d value %d on channel %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
+                    ev->data.note.note,
                     note_table[ev->data.note.note].channel);
-              ev->data.note.channel = note_table[ev->data.note.note].channel;
+              ev->data.note.channel = note_table[ev->data.note.note].channel - 1;
             }
             else {
-              debug("Translating note %d to note %d",
+              debug("Translating note %d to CC %d value %d",
                     ev->data.note.note,
-                    note_table[ev->data.note.note].value);
+                    note_table[ev->data.note.note].value,
+                    ev->data.note.note);
             }
             ev->data.note.note = note_table[ev->data.note.note].value;
             ev->type = SND_SEQ_EVENT_CONTROLLER;
             ev->data.control.param = note_table[ev->data.note.note].value;
-            ev->data.control.value = ev->data.note.velocity;
+            ev->data.control.value = ev->data.note.note;
 
             break;
           }
@@ -677,8 +679,7 @@ static void midi2midi(snd_seq_t *seq_handle,
              * Prepare to translate a MIDI Continuous Controller into another
              * MIDI Continuous Controller according to the configuration file.
              */
-            if (cc_table[ev->data.control.param].channel > 0 && 
-                cc_table[ev->data.control.param].channel < 17) {
+            if (cc_table[ev->data.control.param].channel > 0) {
               debug("Translating MIDI CC %d to MIDI CC %d on channel %d",
                     ev->data.control.param,
                     cc_table[ev->data.control.param].value,
