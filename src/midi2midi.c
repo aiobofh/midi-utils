@@ -52,7 +52,7 @@
 #include "jack_transport.h"
 #endif
 #define APPNAME "midi2midi"
-#define VERSION "1.3.0"
+#define VERSION "1.4.0"
 
 
 /*
@@ -70,6 +70,7 @@ typedef enum {
   TT_NOTE_TO_NOTE,
   TT_CC_TO_CC,
   TT_NOTE_TO_CC,
+  TT_NOTE_TO_CC_PLUS_NOTE,
 #ifdef USE_JACK
   TT_NOTE_TO_JACK,
 #endif
@@ -118,6 +119,7 @@ typedef enum {
 typedef struct {
   translation_type type;
   char value;
+  char value2;
   char last_value;
   char channel;
   int line;
@@ -212,7 +214,8 @@ static capability translation_table_init(const char *filename,
    * Read each line of the configuration file and assign notes accordingly.
    */
   while (!feof(fd)) {
-    int from, to, channel;
+    char buf[1024]; /* Prone to buffer over-run */
+    int from, to, channel, to2;
     char c;
     errno = 0;
     line_number++;
@@ -222,49 +225,24 @@ static capability translation_table_init(const char *filename,
      * line is the name of the MIDI-port to use and the rest is the actual
      * MIDI note conversion table definition.
      */
+
     if (1 == line_number) {
       /*
        * Make sure that we can handle the file version :)
        */
-      fscanf(fd, "midi2midi-config-1.3\n");
-
-      if (errno != 0) {
-        debug("The file '%s' was no 1.3 file, trying 1.2", filename);
-
-        /*
-         * Just to be sure, start over.
-         */
-        fscanf(fd, "midi2midi-config-1.2\n");
-        if (errno != 0) {
-          debug("The file '%s' was no 1.2 file, trying 1.1", filename);
-
-          /*
-           * Just to be sure, start over.
-           */
-          rewind(fd);
-
-          fscanf(fd, "midi2midi-config-1.1\n");
-
-          if (errno != 0) {
-            debug("The file '%s' was no 1.1 file, trying 1.0", filename);
-
-            /*
-             * Just to be sure, start over.
-             */
-            rewind(fd);
-
-            /*
-             * We can also handle 1.0 configuration files.
-             */
-            fscanf(fd, "midi2midi-config-1.0\n");
-
-            if (errno != 0) {
-              error("The file '%s' is not a midi2midi configuration file.",
-                    filename);
-            }
-          }
-        }
+      if (1 != fscanf(fd, "midi2midi-config-%1024s\n", buf)) {
+        error("The file '%s' is not a midi2midi configuration file.",
+              filename);
       }
+
+      if ((0 == strncmp("1.0", buf, 3)) &&
+          (0 == strncmp("1.1", buf, 3)) &&
+          (0 == strncmp("1.2", buf, 3)) &&
+          (0 == strncmp("1.3", buf, 3)) &&
+          (0 == strncmp("1.4", buf, 3))) {
+        error("Unsupported configuration file version '%s'.", buf);
+      }
+
       continue;
     }
     else if (2 == line_number) {
@@ -300,14 +278,22 @@ static capability translation_table_init(const char *filename,
       continue;
     }
     else {
+      fpos_t pos;
       int use_channel = 0;
       translation_type type = TT_NONE;
       /*
        * Read each line of the configuration file and insert translations into
        * the table.
        */
-      if (4 != fscanf(fd, "%3d%1c%3d,%3d\n", &from, &c, &to, &channel)) {
-        fscanf(fd, "%3d%1c%3d\n", &from, &c, &to);
+      fgetpos(fd, &pos);
+      if (5 != fscanf(fd, "%3d%1c%3d,%3d,%3d\n", &from, &c, &to, &channel, &to2)) {
+        fsetpos(fd, &pos);
+        if (4 != fscanf(fd, "%3d%1c%3d,%3d\n", &from, &c, &to, &channel)) {
+          fsetpos(fd, &pos);
+          if (3 != fscanf(fd, "%3d%1c%3d\n", &from, &c, &to)) {
+            error("Unreadable configuration row on line %d.", line_number);
+          }
+        }
       }
       else {
         use_channel = 1;
@@ -346,6 +332,12 @@ static capability translation_table_init(const char *filename,
         case '!': {
           type = TT_NOTE_TO_CC;
           debug("Identified line as TT_NOTE_TO_CC (%c)", c);
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
+          break;
+        }
+        case '+': {
+          type = TT_NOTE_TO_CC_PLUS_NOTE;
+          debug("Identified line as TT_NOTE_TO_CC_PLUS_NOTE (%c)", c);
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
@@ -426,6 +418,7 @@ static capability translation_table_init(const char *filename,
       switch (type) {
         case TT_NOTE_TO_NOTE:
         case TT_NOTE_TO_CC:
+        case TT_NOTE_TO_CC_PLUS_NOTE:
 #ifdef USE_JACK
         case TT_NOTE_TO_JACK:
 #endif
@@ -441,6 +434,9 @@ static capability translation_table_init(const char *filename,
                   filename);
           }
           note_table[from].type = type;
+          if (TT_NOTE_TO_CC_PLUS_NOTE == type) {
+            note_table[from].value2 = to2;
+          }
           note_table[from].value = to;
           if (use_channel) {
             note_table[from].channel = channel;
@@ -516,6 +512,7 @@ static void midi2midi(snd_seq_t *seq_handle,
    * Note parameters
    */
   snd_seq_event_t *ev;
+  snd_seq_event_t ev2;
 
   /*
    * For now an instance which can not handle ALSA MIDI input at all is not
@@ -535,6 +532,7 @@ static void midi2midi(snd_seq_t *seq_handle,
      */
     do {
       int send_midi = 1;
+      int send_second_event = 0;
       int filter = 0;
       /*
        * Get the event information.
@@ -632,6 +630,41 @@ static void midi2midi(snd_seq_t *seq_handle,
             ev->type = SND_SEQ_EVENT_CONTROLLER;
             ev->data.control.param = note_table[ev->data.note.note].value;
             ev->data.control.value = ev->data.note.velocity;
+
+            break;
+          }
+          case TT_NOTE_TO_CC_PLUS_NOTE: {
+            const char type = ev->type;
+            const char velocity = ev->data.note.velocity;
+            const unsigned char note = ev->data.note.note;
+            /*
+             * Prepare to map not to a parameter id and velocity to the value.
+             */
+            if (note_table[ev->data.note.note].channel > 0) {
+              debug("Translating note %d to CC %d value %d on channel %d",
+                    ev->data.note.note,
+                    note_table[note].value,
+                    note_table[note].value2,
+                    note_table[ev->data.note.note].channel);
+              ev->data.note.channel = note_table[ev->data.note.note].channel - 1;
+            }
+            else {
+              debug("Translating note %d to CC %d value %d",
+                    ev->data.note.note,
+                    note_table[note].value,
+                    note_table[note].value2);
+            }
+            ev->type = SND_SEQ_EVENT_CONTROLLER;
+            ev->data.control.param = note_table[note].value;
+            ev->data.control.value = note_table[note].value2;
+
+            send_second_event = 1;
+
+            memcpy(&ev2, ev, sizeof(ev2));
+
+            ev2.type = type;
+            ev2.data.note.note = note;
+            ev2.data.note.velocity = velocity;
 
             break;
           }
@@ -751,6 +784,14 @@ static void midi2midi(snd_seq_t *seq_handle,
        * Get back the system memory allocated for the incoming MIDI event.
        */
       snd_seq_free_event(ev);
+
+      if (1 == send_second_event) {
+        /*
+         * Output the translated note to the MIDI output port.
+         */
+        snd_seq_ev_set_source(&ev2, out_port);
+        snd_seq_event_output_direct(seq_handle, &ev2);
+      }
 
     } while (snd_seq_event_input_pending(seq_handle, 0) > 0);
   }
