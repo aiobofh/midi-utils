@@ -22,6 +22,7 @@
  * -----
  *
  * Author: AiO <aio at aio dot nu>
+ *         Ascallonisi <alessandro dot mortari at gmail dot com>
  *
  * Simple MIDI to MIDI converter. Original idea was to translate
  * digital percussion notes to other notes. For example to be able to
@@ -599,7 +600,7 @@ static void midi2midi(snd_seq_t *seq_handle,
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
                     note_table[ev->data.note.note].channel);
-              ev->data.note.channel = note_table[ev->data.note.note].channel;
+              ev->data.note.channel = note_table[ev->data.note.note].channel - 1;
             }
             else {
               debug("Translating note %d to note %d",
@@ -628,10 +629,9 @@ static void midi2midi(snd_seq_t *seq_handle,
                     note_table[ev->data.note.note].value,
                     ev->data.note.note);
             }
-            ev->data.note.note = note_table[ev->data.note.note].value;
             ev->type = SND_SEQ_EVENT_CONTROLLER;
             ev->data.control.param = note_table[ev->data.note.note].value;
-            ev->data.control.value = ev->data.note.note;
+            ev->data.control.value = ev->data.note.velocity;
 
             break;
           }
@@ -1041,4 +1041,3 @@ int main(int argc, char *argv[]) {
    */
   return 0;
 }
-
