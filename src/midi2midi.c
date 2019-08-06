@@ -306,10 +306,12 @@ static capability translation_table_init(const char *filename,
        * the table.
        */
       if (4 != fscanf(fd, "%3d%1c%3d,%3d\n", &from, &c, &to, &channel)) {
+	debug("Falling back to only %d:1 channel", 1);
         fscanf(fd, "%3d%1c%3d\n", &from, &c, &to);
       }
       else {
         use_channel = 1;
+	debug("Reading %d:%d,%d", from, to, channel);
         if ((16 < channel) || (0 > channel)) {
           error("Channel number must be between 1 and 16, not %d", channel);
         }
@@ -441,7 +443,9 @@ static capability translation_table_init(const char *filename,
           }
           note_table[from].type = type;
           note_table[from].value = to;
-
+	  if (use_channel) {
+ 	    note_table[from].channel = channel;
+	  }
           break;
         }
         case TT_CC_TO_CC: {
@@ -481,7 +485,7 @@ static capability translation_table_init(const char *filename,
 }
 
 #define FILTERMODE(NAME, ALSANAME)                                      \
-  filter |= ((0 != (filter & MT_ ## NAME)) && (SND_SEQ_EVENT_ ## ALSANAME == ev->type))
+  loc_filter |= ((0 != (filter & MT_ ## NAME)) && (SND_SEQ_EVENT_ ## ALSANAME == ev->type))
 
 /*
  * Main event loop.
@@ -532,7 +536,8 @@ static void midi2midi(snd_seq_t *seq_handle,
      */
     do {
       int send_midi = 1;
-      int filter = 0;
+      int loc_filter = 0;
+
       /*
        * Get the event information.
        */
@@ -578,7 +583,7 @@ static void midi2midi(snd_seq_t *seq_handle,
       /*
        * Translate either a note or a CC command.
        */
-      if (0 != filter) {
+      if (0 != loc_filter) {
         debug("Filtering event %d\n", ev->type);
         send_midi = 0;
       }
@@ -594,16 +599,18 @@ static void midi2midi(snd_seq_t *seq_handle,
              */
             if (note_table[ev->data.note.note].channel > 0 && 
                 note_table[ev->data.note.note].channel < 17) {
-              debug("Translating note %d to note %d on channel %d",
+              debug("Translating note %d to note %d on channel %d, event type %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
-                    note_table[ev->data.note.note].channel);
-              ev->data.note.channel = note_table[ev->data.note.note].channel;
+                    note_table[ev->data.note.note].channel,
+                    ev->type);
+              ev->data.note.channel = note_table[ev->data.note.note].channel - 1;
             }
             else {
-              debug("Translating note %d to note %d",
+              debug("Translating note %d to note %d, event type %d",
                     ev->data.note.note,
-                    note_table[ev->data.note.note].value);
+                    note_table[ev->data.note.note].value,
+                    ev->type);
             }
             ev->data.note.note = note_table[ev->data.note.note].value;
 
@@ -615,14 +622,14 @@ static void midi2midi(snd_seq_t *seq_handle,
              */
             if (note_table[ev->data.note.note].channel > 0 &&
                 note_table[ev->data.note.note].channel < 17) {
-              debug("Translating note %d to note %d on channel %d",
+              debug("Translating note %d to cc %d on channel %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value,
                     note_table[ev->data.note.note].channel);
-              ev->data.note.channel = note_table[ev->data.note.note].channel;
+              ev->data.note.channel = note_table[ev->data.note.note].channel - 1;
             }
             else {
-              debug("Translating note %d to note %d",
+              debug("Translating note %d to cc %d",
                     ev->data.note.note,
                     note_table[ev->data.note.note].value);
             }
@@ -679,10 +686,11 @@ static void midi2midi(snd_seq_t *seq_handle,
              */
             if (cc_table[ev->data.control.param].channel > 0 && 
                 cc_table[ev->data.control.param].channel < 17) {
-              debug("Translating MIDI CC %d to MIDI CC %d on channel %d",
+              debug("Translating MIDI CC %d to MIDI CC %d on channel %d, event type %d",
                     ev->data.control.param,
                     cc_table[ev->data.control.param].value,
-                    cc_table[ev->data.control.param].channel);
+                    cc_table[ev->data.control.param].channel,
+                    ev->type);
               ev->data.control.channel = cc_table[ev->data.control.param].channel;
             }
             else {
