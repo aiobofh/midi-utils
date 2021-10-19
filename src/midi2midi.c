@@ -22,6 +22,7 @@
  * -----
  *
  * Author: AiO <aio at aio dot nu>
+ * Contributor: s10e <s10e at live dot com>
  *
  * Simple MIDI to MIDI converter. Original idea was to translate
  * digital percussion notes to other notes. For example to be able to
