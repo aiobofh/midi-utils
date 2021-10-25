@@ -197,6 +197,12 @@ Command matrix:
 47 = WHEEL
 
 
+MIDI Continuous Controller to MIDI note translation
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Separator: '?'
+
+
 Note to MIDI Machine Control
 - - - - - - - - - - - - - -
 

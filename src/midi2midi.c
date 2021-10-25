@@ -22,6 +22,7 @@
  * -----
  *
  * Author: AiO <aio at aio dot nu>
+ * Contributor: s10e <s10e at live dot com>
  *
  * Simple MIDI to MIDI converter. Original idea was to translate
  * digital percussion notes to other notes. For example to be able to
@@ -69,6 +70,7 @@ typedef enum {
   TT_NOTE_TO_NOTE,
   TT_CC_TO_CC,
   TT_NOTE_TO_CC,
+  TT_CC_TO_NOTE,
 #ifdef USE_JACK
   TT_NOTE_TO_JACK,
 #endif
@@ -350,6 +352,12 @@ static capability translation_table_init(const char *filename,
           capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
           break;
         }
+        case '?': {
+          type = TT_CC_TO_NOTE;
+          debug("Identified line as TT_CC_TO_NOTE (%c)", c);
+          capabilities = capabilities | (CB_ALSA_MIDI_IN | CB_ALSA_MIDI_OUT);
+          break;
+        }
 #ifdef USE_JACK
         case 'J': {
           debug("Identified line as TT_NOTE_TO_JACK (%c)", c);
@@ -448,6 +456,7 @@ static capability translation_table_init(const char *filename,
 	  }
           break;
         }
+        case TT_CC_TO_NOTE:
         case TT_CC_TO_CC: {
           /*
            * Make sure that there are no duplicates in the MIDI Contentious
@@ -618,7 +627,7 @@ static void midi2midi(snd_seq_t *seq_handle,
           }
           case TT_NOTE_TO_CC: {
             /*
-             * Prepare to map not to a parameter id and velocity to the value.
+             * Prepare to map note to a parameter id and velocity to the value.
              */
             if (note_table[ev->data.note.note].channel > 0 &&
                 note_table[ev->data.note.note].channel < 17) {
@@ -677,7 +686,7 @@ static void midi2midi(snd_seq_t *seq_handle,
          * When midi2midi receives a MIDI Continuous Controller message and
          * the from-value (index) is set in the translation table for MIDI
          */
-        switch (note_table[ev->data.control.param].type) {
+        switch (cc_table[ev->data.control.param].type) {
 
           case TT_CC_TO_CC: {
             /*
@@ -702,10 +711,35 @@ static void midi2midi(snd_seq_t *seq_handle,
 
             break;
           }
+          case TT_CC_TO_NOTE: {
+            /*
+             * Prepare to translate a MIDI Continuous Controller into a note
+             * and value to the velocity.
+             */
+            if (cc_table[ev->data.control.param].channel > 0 && 
+                cc_table[ev->data.control.param].channel < 17) {
+              debug("Translating MIDI CC %d to note %d on channel %d",
+                    ev->data.control.param,
+                    cc_table[ev->data.control.param].value,
+                    cc_table[ev->data.control.param].channel);
+              ev->data.control.channel = cc_table[ev->data.control.param].channel;
+            }
+            else {
+              debug("Translating MIDI CC %d to note %d",
+                    ev->data.control.param,
+                    cc_table[ev->data.control.param].value);
+            }
+            ev->data.control.param = cc_table[ev->data.control.param].value;
+            ev->type = ev->data.control.value ? SND_SEQ_EVENT_NOTEON : SND_SEQ_EVENT_NOTEOFF;
+            ev->data.note.note = cc_table[ev->data.control.param].value;
+            ev->data.note.velocity = ev->data.control.value;
+
+            break;
+          }
           default: {
             error("MIDI Continuous Controller translation %d is not "
                   "implemented yet.",
-                  note_table[ev->data.note.note].type);
+                  cc_table[ev->data.control.param].type);
 
             break;
           }
